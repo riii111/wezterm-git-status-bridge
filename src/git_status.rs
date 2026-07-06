@@ -13,18 +13,11 @@ pub enum GitStatusError {
 }
 
 pub fn collect(cwd: &Path) -> Result<Option<RepositoryStatus>, GitStatusError> {
-    let Some(root) = git_output(cwd, &["rev-parse", "--show-toplevel"])? else {
+    if !cwd.is_dir() {
         return Ok(None);
-    };
-    let Some(git_dir) = git_output(cwd, &["rev-parse", "--path-format=absolute", "--git-dir"])?
-    else {
-        return Ok(None);
-    };
-    let Some(common_dir) = git_output(
-        cwd,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?
-    else {
+    }
+
+    let Some((root, git_dir, common_dir)) = repository_paths(cwd)? else {
         return Ok(None);
     };
 
@@ -36,8 +29,6 @@ pub fn collect(cwd: &Path) -> Result<Option<RepositoryStatus>, GitStatusError> {
         },
     };
 
-    let git_dir = PathBuf::from(git_dir);
-    let common_dir = PathBuf::from(common_dir);
     let mut flags = StatusFlags::default();
     flags.set_detached(detached);
     flags.set_dirty(is_dirty(cwd)?);
@@ -53,6 +44,39 @@ pub fn collect(cwd: &Path) -> Result<Option<RepositoryStatus>, GitStatusError> {
     }))
 }
 
+fn repository_paths(cwd: &Path) -> Result<Option<(String, PathBuf, PathBuf)>, GitStatusError> {
+    let Some(output) = git_output(
+        cwd,
+        &[
+            "rev-parse",
+            "--show-toplevel",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let mut lines = output.lines();
+    let Some(root) = lines.next() else {
+        return Ok(None);
+    };
+    let Some(git_dir) = lines.next() else {
+        return Ok(None);
+    };
+    let Some(common_dir) = lines.next() else {
+        return Ok(None);
+    };
+
+    Ok(Some((
+        root.to_owned(),
+        PathBuf::from(git_dir),
+        PathBuf::from(common_dir),
+    )))
+}
+
 fn git_output(cwd: &Path, args: &[&str]) -> Result<Option<String>, GitStatusError> {
     let output = Command::new("git").args(args).current_dir(cwd).output()?;
     if !output.status.success() {
@@ -63,28 +87,14 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Option<String>, GitStatusErro
     Ok((!value.is_empty()).then_some(value))
 }
 
-fn git_status_success(cwd: &Path, args: &[&str]) -> Result<bool, GitStatusError> {
-    let status = Command::new("git").args(args).current_dir(cwd).status()?;
-    Ok(status.success())
-}
-
 fn is_dirty(cwd: &Path) -> Result<bool, GitStatusError> {
-    let _ = git_status_success(cwd, &["update-index", "-q", "--refresh"])?;
-    if !git_status_success(cwd, &["diff", "--quiet"])? {
-        return Ok(true);
-    }
-    if !git_status_success(cwd, &["diff", "--quiet", "--cached"])? {
-        return Ok(true);
-    }
-
     Ok(git_output(
         cwd,
         &[
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-            "--directory",
-            "--no-empty-directory",
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=normal",
         ],
     )?
     .is_some())
@@ -117,6 +127,18 @@ mod tests {
         let temp = TempDir::new().expect("create temp dir");
 
         let status = collect(temp.path()).expect("collect status");
+
+        assert_eq!(status, None);
+    }
+
+    #[test]
+    fn returns_absent_status_when_cwd_no_longer_exists() {
+        let temp = TempDir::new().expect("create temp dir");
+        let deleted = temp.path().join("deleted");
+        fs::create_dir(&deleted).expect("create deleted dir");
+        fs::remove_dir(&deleted).expect("delete cwd");
+
+        let status = collect(&deleted).expect("collect status");
 
         assert_eq!(status, None);
     }

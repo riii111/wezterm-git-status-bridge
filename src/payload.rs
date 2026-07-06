@@ -106,7 +106,13 @@ impl Payload {
 fn sanitize_field(value: &str) -> String {
     value
         .chars()
-        .map(|character| if character < ' ' { ' ' } else { character })
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
         .collect()
 }
 
@@ -177,18 +183,18 @@ mod tests {
     fn replaces_control_characters_before_encoding_payload_line() {
         let payload = Payload {
             at: 123,
-            pane_id: "w1\tp1".to_owned(),
+            pane_id: "w1\tp1\u{7f}".to_owned(),
             cwd: "/tmp/project\nnested".into(),
             repository: Some(RepositoryStatus {
                 repo: "pro\tject".to_owned(),
-                ref_name: "main\nnext".to_owned(),
+                ref_name: "main\nnext\u{85}".to_owned(),
                 flags: StatusFlags::default(),
             }),
         };
 
         assert_eq!(
             payload.encode_line(),
-            "herdrgit1\t123\tw1 p1\t/tmp/project nested\t1\tpro ject\tmain next\t\n"
+            "herdrgit1\t123\tw1 p1 \t/tmp/project nested\t1\tpro ject\tmain next \t\n"
         );
     }
 }

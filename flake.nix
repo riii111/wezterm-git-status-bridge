@@ -88,6 +88,7 @@
               pkgs.cargo-audit
               pkgs.cargo-machete
               pkgs.lefthook
+              pkgs.lua5_4
             ];
           };
         }

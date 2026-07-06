@@ -131,6 +131,8 @@ fn unix_now() -> Result<u64, CliError> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
+    use std::process::Command;
 
     use tempfile::TempDir;
 
@@ -155,6 +157,39 @@ mod tests {
     }
 
     #[test]
+    fn update_writes_present_repository_status() {
+        let cache = TempDir::new().expect("create cache dir");
+        let repo = git_repo();
+
+        update(UpdateArgs {
+            cache_dir: Some(cache.path().to_path_buf()),
+            pane_id: Some("w1:p1".to_owned()),
+            cwd: Some(repo.path().to_path_buf()),
+            ..UpdateArgs::default()
+        })
+        .expect("update cache");
+
+        let global = fs::read_to_string(cache.path().join("herdr-git-info")).expect("read cache");
+        assert!(global.contains("\tw1:p1\t"));
+        assert!(global.contains("\t1\t"));
+        assert!(global.contains("\tmain\t"));
+    }
+
+    #[test]
+    fn event_json_context_is_used_before_herdr_fallback() {
+        let context = resolve_context(&UpdateArgs {
+            event_json: Some(r#"{"pane":{"pane_id":"w1:p1","cwd":"/from-event"}}"#.to_owned()),
+            herdr_bin: "missing-herdr-for-test".to_owned(),
+            ..UpdateArgs::default()
+        })
+        .expect("resolve context")
+        .expect("context");
+
+        assert_eq!(context.pane_id, "w1:p1");
+        assert_eq!(context.cwd, Path::new("/from-event"));
+    }
+
+    #[test]
     fn rejects_pane_id_without_cwd() {
         let error = resolve_context(&UpdateArgs {
             pane_id: Some("w1:p1".to_owned()),
@@ -176,5 +211,25 @@ mod tests {
         .expect_err("partial context should fail");
 
         assert!(matches!(error, CliError::PartialExplicitContext));
+    }
+
+    fn git_repo() -> TempDir {
+        let temp = TempDir::new().expect("create temp dir");
+        git(temp.path(), ["init", "--initial-branch", "main"]);
+        git(temp.path(), ["config", "user.name", "Test User"]);
+        git(temp.path(), ["config", "user.email", "test@example.com"]);
+        fs::write(temp.path().join("README.md"), "test").expect("write readme");
+        git(temp.path(), ["add", "README.md"]);
+        git(temp.path(), ["commit", "-m", "initial"]);
+        temp
+    }
+
+    fn git<const N: usize>(cwd: &Path, args: [&str; N]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .expect("run git");
+        assert!(status.success());
     }
 }

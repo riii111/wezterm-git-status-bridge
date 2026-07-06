@@ -7,6 +7,7 @@ local M = {}
 local DEFAULTS = {
 	separator = " | ",
 	show_time = true,
+	max_age_seconds = 300,
 	colors = {
 		muted = "#565f89",
 		repo = "#c0caf5",
@@ -30,6 +31,9 @@ local function merge_options(options)
 	return {
 		separator = options.separator or DEFAULTS.separator,
 		show_time = options.show_time ~= false,
+		cache_dir = options.cache_dir,
+		max_age_seconds = options.max_age_seconds == nil and DEFAULTS.max_age_seconds or options.max_age_seconds,
+		now = options.now or os.time,
 		colors = colors,
 	}
 end
@@ -73,7 +77,10 @@ local function parse_payload(value)
 	return info
 end
 
-local function cache_dir()
+local function cache_dir(options)
+	if options.cache_dir and options.cache_dir ~= "" then
+		return options.cache_dir
+	end
 	local xdg_cache_home = os.getenv("XDG_CACHE_HOME")
 	if xdg_cache_home and xdg_cache_home ~= "" then
 		return xdg_cache_home .. "/wezterm"
@@ -91,16 +98,29 @@ local function read_line(path)
 	return value
 end
 
-local function focused_cache_path()
-	return cache_dir() .. "/herdr-git-info"
+local function focused_cache_path(options)
+	return cache_dir(options) .. "/herdr-git-info"
 end
 
-local function pane_cache_path(pane_id)
-	return cache_dir() .. "/herdr-git-info-by-pane/" .. pane_id:gsub("/", "_")
+local function pane_cache_path(options, pane_id)
+	return cache_dir(options) .. "/herdr-git-info-by-pane/" .. pane_id:gsub("/", "_")
 end
 
-local function read_git_info()
-	local focused = parse_payload(read_line(focused_cache_path()))
+local function is_fresh(info, options)
+	if not info then
+		return false
+	end
+	if options.max_age_seconds == false then
+		return true
+	end
+	return options.now() - info.at <= options.max_age_seconds
+end
+
+local function read_git_info(options)
+	local focused = parse_payload(read_line(focused_cache_path(options)))
+	if not is_fresh(focused, options) then
+		return nil
+	end
 	if not focused or focused.herdr_pane_id == "" then
 		if focused and focused.present then
 			return focused
@@ -108,8 +128,8 @@ local function read_git_info()
 		return nil
 	end
 
-	local pane = parse_payload(read_line(pane_cache_path(focused.herdr_pane_id)))
-	if pane and pane.herdr_pane_id == focused.herdr_pane_id and pane.at >= focused.at then
+	local pane = parse_payload(read_line(pane_cache_path(options, focused.herdr_pane_id)))
+	if pane and is_fresh(pane, options) and pane.herdr_pane_id == focused.herdr_pane_id and pane.at >= focused.at then
 		if pane.present then
 			return pane
 		end
@@ -157,7 +177,7 @@ end
 function M.render(window, options)
 	options = merge_options(options)
 	local segments = {}
-	local info = read_git_info()
+	local info = read_git_info(options)
 
 	if info then
 		push_git_status(segments, info, options)
@@ -175,6 +195,11 @@ function M.render(window, options)
 end
 
 function M.setup(options)
+	if M._setup_done then
+		return
+	end
+	M._setup_done = true
+
 	local merged = merge_options(options)
 	wezterm.on("update-right-status", function(window, _)
 		M.render(window, merged)

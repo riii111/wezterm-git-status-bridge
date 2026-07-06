@@ -8,12 +8,20 @@ Bridge focused Herdr pane Git status into WezTerm right-status rendering.
 - Herdr plugin: runs the CLI on pane and workspace events.
 - WezTerm Lua module: reads the cache and renders the right status.
 
+## Requirements
+
+- `git`
+- Herdr 0.7.0 or newer
+- WezTerm
+- macOS for the bundled Herdr plugin
+
 ## Usage
 
 Install the binary somewhere in `PATH`, then install the Herdr plugin from `contrib/herdr-plugin`.
 
 ```sh
 wezterm-git-status-bridge update
+nix run github:riii111/wezterm-git-status-bridge -- update
 ```
 
 Install `contrib/wezterm/right-status.lua` in your WezTerm configuration directory and load it from `wezterm.lua`:
@@ -29,6 +37,10 @@ The binary writes these cache files:
 - `herdr-git-info-by-pane/<pane-id>`: latest status per Herdr pane
 
 Payloads use a tab-separated `herdrgit1` line so WezTerm can render synchronously without spawning `git`.
+
+Flags are encoded as `D` for detached HEAD, `d` for dirty, `w` for worktree, `R` for rebase, and `C` for cherry-pick.
+
+The status is a snapshot from the latest Herdr pane event. It does not update while focus stays on the same pane unless another Herdr event runs the bridge.
 
 The update command resolves pane context in this order:
 
@@ -47,6 +59,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo build --release
+lua tests/right-status.lua "$(mktemp -d)"
 cargo audit
 cargo machete
 ```
