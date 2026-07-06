@@ -143,6 +143,9 @@ local function refresh(pane, options)
 	if not id or not cwd or cwd == "" then
 		return false
 	end
+	if not wezterm.background_child_process then
+		return false
+	end
 
 	local now = options.now()
 	local last = last_update_by_pane[id]
@@ -162,9 +165,6 @@ local function refresh(pane, options)
 	if options.cache_dir and options.cache_dir ~= "" then
 		table.insert(args, "--cache-dir")
 		table.insert(args, options.cache_dir)
-	end
-	if not wezterm.background_child_process then
-		return false
 	end
 	return pcall(wezterm.background_child_process, args)
 end

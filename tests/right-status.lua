@@ -385,6 +385,38 @@ local function setup_can_disable_background_refreshes()
 	assert_equal(#_G.wezterm_background_processes, 0, "disabled background refresh")
 end
 
+local function refresh_without_background_api_does_not_throttle()
+	_G.wezterm_background_processes = {}
+	local wezterm_module = package.loaded.wezterm
+	local original_background_child_process = wezterm_module.background_child_process
+	local pane = {
+		pane_id = function()
+			return 44
+		end,
+		get_current_working_dir = function()
+			return "/repo"
+		end,
+	}
+	local now = 100
+
+	wezterm_module.background_child_process = nil
+	local launched = right_status.refresh(pane, {
+		now = function()
+			return now
+		end,
+	})
+	assert_equal(launched, false, "missing background api")
+
+	wezterm_module.background_child_process = original_background_child_process
+	launched = right_status.refresh(pane, {
+		now = function()
+			return now
+		end,
+	})
+	assert_equal(launched, true, "retry after background api returns")
+	assert_equal(#_G.wezterm_background_processes, 1, "retry process count")
+end
+
 local function render_generated_cache(cache, now)
 	return segment_text(render_with_options(cache, {
 		now = function()
@@ -439,6 +471,7 @@ local function run_unit_assertions()
 	setup_refreshes_active_pane_in_background()
 	setup_throttles_background_refreshes()
 	setup_can_disable_background_refreshes()
+	refresh_without_background_api_does_not_throttle()
 end
 
 if arg[2] == "--e2e" then
