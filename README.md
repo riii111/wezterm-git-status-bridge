@@ -1,4 +1,5 @@
 # wezterm-git-status-bridge
+<img width="459" height="183" alt="image" src="https://github.com/user-attachments/assets/ef3ad27f-fa9e-47b0-9fce-ce3298b68e21" />
 
 Bridge focused Herdr pane Git status into WezTerm right-status rendering.
 
