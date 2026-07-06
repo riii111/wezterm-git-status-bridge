@@ -57,6 +57,10 @@
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
 
+            nativeCheckInputs = [
+              pkgs.git
+            ];
+
             meta = {
               description = "Bridge Git repository status into WezTerm status rendering";
               homepage = "https://github.com/riii111/wezterm-git-status-bridge";
