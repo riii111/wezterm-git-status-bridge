@@ -31,7 +31,10 @@ pub fn collect(cwd: &Path) -> Result<Option<RepositoryStatus>, GitStatusError> {
 
     let mut flags = StatusFlags::default();
     flags.set_detached(detached);
-    flags.set_dirty(is_dirty(cwd)?);
+    let Some(dirty) = is_dirty(cwd)? else {
+        return Ok(None);
+    };
+    flags.set_dirty(dirty);
     flags.set_worktree(canonicalize_lossy(&git_dir) != canonicalize_lossy(&common_dir));
     flags
         .set_rebase(git_dir.join("rebase-merge").is_dir() || git_dir.join("rebase-apply").is_dir());
@@ -87,17 +90,22 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Option<String>, GitStatusErro
     Ok((!value.is_empty()).then_some(value))
 }
 
-fn is_dirty(cwd: &Path) -> Result<bool, GitStatusError> {
-    Ok(git_output(
-        cwd,
-        &[
+fn is_dirty(cwd: &Path) -> Result<Option<bool>, GitStatusError> {
+    let output = Command::new("git")
+        .args([
             "--no-optional-locks",
             "status",
             "--porcelain=v1",
             "--untracked-files=normal",
-        ],
-    )?
-    .is_some())
+        ])
+        .current_dir(cwd)
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok(Some(!value.is_empty()))
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -192,6 +200,16 @@ mod tests {
             .expect("status");
 
         assert!(status.flags.dirty());
+    }
+
+    #[test]
+    fn returns_absent_status_when_dirty_check_fails() {
+        let repo = test_repo();
+        fs::write(repo.path().join(".git/index"), "invalid").expect("corrupt index");
+
+        let status = collect(repo.path()).expect("collect status");
+
+        assert_eq!(status, None);
     }
 
     #[test]

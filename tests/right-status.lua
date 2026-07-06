@@ -24,8 +24,12 @@ local function assert_equal(actual, expected, label)
 	end
 end
 
+local function shell_quote(value)
+	return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
 local function mkdir(path)
-	assert(os.execute("mkdir -p " .. path))
+	assert(os.execute("mkdir -p -- " .. shell_quote(path)))
 end
 
 local function write_file(path, contents)
@@ -91,6 +95,14 @@ local function prefers_newer_per_pane_payload()
 	assert_equal(segment_text(render(cache, 130)), " repo | wt feature", "per-pane payload")
 end
 
+local function uses_sanitized_per_pane_path()
+	local cache = cache_dir("dot-pane")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\t..\t/repo\t1\trepo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/_", "herdrgit1\t120\t..\t/repo\t1\trepo\tfeature\t\n")
+
+	assert_equal(segment_text(render(cache, 130)), " repo | feature", "sanitized per-pane path")
+end
+
 local function hides_absent_payload()
 	local cache = cache_dir("absent")
 	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t0\t\t\t\n")
@@ -111,5 +123,6 @@ end
 renders_focused_payload()
 hides_stale_payload()
 prefers_newer_per_pane_payload()
+uses_sanitized_per_pane_path()
 hides_absent_payload()
 setup_is_idempotent()

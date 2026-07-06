@@ -103,7 +103,11 @@ local function focused_cache_path(options)
 end
 
 local function pane_cache_path(options, pane_id)
-	return cache_dir(options) .. "/herdr-git-info-by-pane/" .. pane_id:gsub("/", "_")
+	local sanitized = pane_id:gsub("/", "_")
+	if sanitized == "" or sanitized:match("^%.+$") then
+		sanitized = "_"
+	end
+	return cache_dir(options) .. "/herdr-git-info-by-pane/" .. sanitized
 end
 
 local function is_fresh(info, options)
