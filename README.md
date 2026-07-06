@@ -11,8 +11,8 @@ Bridge focused Herdr pane Git status into WezTerm right-status rendering.
 ## Requirements
 
 - `git`
-- Herdr 0.7.0 or newer
-- WezTerm
+- [Herdr](https://herdr.dev) 0.7.0 or newer
+- WezTerm with reasonably recent bundled Nerd Font symbols
 - macOS for the bundled Herdr plugin
 
 ## Usage
@@ -20,8 +20,8 @@ Bridge focused Herdr pane Git status into WezTerm right-status rendering.
 Install the binary somewhere in `PATH`, then install the Herdr plugin from `contrib/herdr-plugin`.
 
 ```sh
-wezterm-git-status-bridge update
-nix run github:riii111/wezterm-git-status-bridge -- update
+wezterm-git-status-bridge update --pane-id manual --cwd "$PWD"
+nix run github:riii111/wezterm-git-status-bridge -- update --pane-id manual --cwd "$PWD"
 ```
 
 Install `contrib/wezterm/right-status.lua` in your WezTerm configuration directory and load it from `wezterm.lua`:
@@ -30,6 +30,23 @@ Install `contrib/wezterm/right-status.lua` in your WezTerm configuration directo
 local git_status = require("right-status")
 git_status.setup()
 ```
+
+`setup()` registers `update-right-status`, `window-focus-changed`, `window-config-reloaded`, and a custom `render-right-status` event. Emit `render-right-status` from your own key bindings when you need an immediate redraw.
+
+Common Lua options:
+
+| Option | Default |
+| --- | --- |
+| `max_age_seconds` | `300`; set `false` to disable TTL hiding |
+| `separator` | Powerline separator with spacing |
+| `show_time` | `true` |
+| `colors` | Tokyo Night-inspired muted dark palette |
+| `mode_styles` | `nil`; key-table labels to prepend before Git status |
+| `status_bg` | `#1f1f28`; applied after a mode label, set `false` to disable |
+| `show_git_for_pane` | `nil`; optional pane filter, may receive `nil` |
+| `time_format` | `%a %b %e %H:%M` |
+
+For custom composition, use `git_segments(options)`, `mode_segments(window, options)`, or `segments(window, pane, options)` and pass the result to `wezterm.format`.
 
 The binary writes these cache files:
 
@@ -47,9 +64,9 @@ The update command resolves pane context in this order:
 1. `--pane-id` and `--cwd`
 2. `--event-json`
 3. `HERDR_PLUGIN_EVENT_JSON`
-4. `herdr pane list`
 
-Set `WEZTERM_GIT_STATUS_BRIDGE_BIN` when the Herdr plugin should use a binary outside `PATH`. Set `HERDR_BIN_PATH` when `herdr` is outside `PATH`.
+Set `WEZTERM_GIT_STATUS_BRIDGE_BIN` when the Herdr plugin should use a binary outside `PATH`.
+The Herdr plugin uses `HERDR_PLUGIN_EVENT_JSON` when available and falls back to `herdr pane list`.
 
 ## Development
 

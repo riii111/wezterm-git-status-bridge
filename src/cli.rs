@@ -7,7 +7,6 @@ use thiserror::Error;
 use crate::cache::{self, CacheError};
 use crate::event::{self, EventError, PaneContext};
 use crate::git_status::{self, GitStatusError};
-use crate::herdr::{self, HerdrError};
 use crate::payload::Payload;
 
 #[derive(Debug, Parser)]
@@ -33,9 +32,6 @@ pub struct UpdateArgs {
     #[arg(long, value_name = "JSON")]
     pub event_json: Option<String>,
 
-    #[arg(long, default_value = "herdr", value_name = "BIN")]
-    pub herdr_bin: String,
-
     #[arg(long, value_name = "ID")]
     pub pane_id: Option<String>,
 
@@ -49,8 +45,6 @@ pub enum CliError {
     PartialExplicitContext,
     #[error(transparent)]
     Event(#[from] EventError),
-    #[error(transparent)]
-    Herdr(#[from] HerdrError),
     #[error(transparent)]
     GitStatus(#[from] GitStatusError),
     #[error(transparent)]
@@ -118,7 +112,7 @@ fn resolve_context(args: &UpdateArgs) -> Result<Option<PaneContext>, CliError> {
         return Ok(Some(context));
     }
 
-    Ok(herdr::focused_pane_from_cli(&args.herdr_bin)?)
+    Ok(None)
 }
 
 fn unix_now() -> Result<u64, CliError> {
@@ -176,10 +170,9 @@ mod tests {
     }
 
     #[test]
-    fn event_json_context_is_used_before_herdr_fallback() {
+    fn event_json_context_is_used() {
         let context = resolve_context(&UpdateArgs {
             event_json: Some(r#"{"pane":{"pane_id":"w1:p1","cwd":"/from-event"}}"#.to_owned()),
-            herdr_bin: "missing-herdr-for-test".to_owned(),
             ..UpdateArgs::default()
         })
         .expect("resolve context")
@@ -187,6 +180,13 @@ mod tests {
 
         assert_eq!(context.pane_id, "w1:p1");
         assert_eq!(context.cwd, Path::new("/from-event"));
+    }
+
+    #[test]
+    fn returns_none_without_context_input() {
+        let context = resolve_context(&UpdateArgs::default()).expect("resolve context");
+
+        assert_eq!(context, None);
     }
 
     #[test]

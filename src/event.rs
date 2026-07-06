@@ -25,11 +25,15 @@ pub fn parse_event_json(json: &str) -> Result<Option<PaneContext>, EventError> {
 }
 
 pub fn pane_context_from_value(value: &Value) -> Option<PaneContext> {
+    if let Some(context) = focused_pane_context_from_list(value) {
+        return Some(context);
+    }
+
     for path in [
-        vec![],
-        vec!["pane"],
         vec!["focused_pane"],
         vec!["result", "pane"],
+        vec!["pane"],
+        vec![],
     ] {
         let Some(candidate) = value_at(value, &path) else {
             continue;
@@ -40,6 +44,18 @@ pub fn pane_context_from_value(value: &Value) -> Option<PaneContext> {
     }
 
     None
+}
+
+fn focused_pane_context_from_list(value: &Value) -> Option<PaneContext> {
+    value_at(value, &["result", "panes"])?
+        .as_array()?
+        .iter()
+        .filter(|pane| {
+            pane.get("focused")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .find_map(pane_context_from_object)
 }
 
 fn pane_context_from_object(value: &Value) -> Option<PaneContext> {
@@ -107,6 +123,18 @@ mod tests {
     }
 
     #[test]
+    fn prefers_focused_pane_over_event_pane() {
+        let context = parse_event_json(
+            r#"{"pane":{"pane_id":"w1:p1","cwd":"/event"},"focused_pane":{"pane_id":"w2:p2","cwd":"/focused"}}"#,
+        )
+        .expect("parse event")
+        .expect("context");
+
+        assert_eq!(context.pane_id, "w2:p2");
+        assert_eq!(context.cwd, std::path::PathBuf::from("/focused"));
+    }
+
+    #[test]
     fn reads_top_level_pane_context_from_pane_list_item() {
         let context = parse_event_json(r#"{"pane_id":"w3:p4","foreground_cwd":"/current"}"#)
             .expect("parse event")
@@ -114,6 +142,18 @@ mod tests {
 
         assert_eq!(context.pane_id, "w3:p4");
         assert_eq!(context.cwd, std::path::PathBuf::from("/current"));
+    }
+
+    #[test]
+    fn reads_focused_pane_context_from_pane_list() {
+        let context = parse_event_json(
+            r#"{"result":{"panes":[{"pane_id":"w1:p1","cwd":"/old","focused":false},{"pane_id":"w2:p2","foreground_cwd":"/focused","focused":true}]}}"#,
+        )
+        .expect("parse event")
+        .expect("context");
+
+        assert_eq!(context.pane_id, "w2:p2");
+        assert_eq!(context.cwd, std::path::PathBuf::from("/focused"));
     }
 
     #[test]

@@ -10,13 +10,5 @@ on = "pane.focused"
 command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/update-status\""]
 
 [[events]]
-on = "pane.created"
-command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/update-status\""]
-
-[[events]]
-on = "pane.moved"
-command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/update-status\""]
-
-[[events]]
 on = "workspace.focused"
 command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/update-status\""]
