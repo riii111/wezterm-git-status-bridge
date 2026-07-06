@@ -14,8 +14,15 @@ if [ -n "${HERDR_PLUGIN_EVENT_JSON:-}" ]; then
   exec "$bin" update
 fi
 
-if command -v herdr >/dev/null 2>&1; then
-  event_json=$(herdr pane list 2>/dev/null) || event_json=
+herdr_bin=
+if [ -n "${HERDR_BIN_PATH:-}" ]; then
+  herdr_bin=$HERDR_BIN_PATH
+elif command -v herdr >/dev/null 2>&1; then
+  herdr_bin=$(command -v herdr)
+fi
+
+if [ -n "$herdr_bin" ]; then
+  event_json=$("$herdr_bin" pane list 2>/dev/null) || event_json=
   if [ -n "$event_json" ]; then
     exec "$bin" update --event-json "$event_json"
   fi
