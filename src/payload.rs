@@ -82,28 +82,32 @@ impl StatusFlags {
 }
 
 impl Payload {
+    // This wire format is parsed by the WezTerm Lua module.
     pub fn encode_line(&self) -> String {
         let (present, repo, ref_name, flags) = match &self.repository {
             Some(status) => (
                 "1",
-                status.repo.as_str(),
-                status.ref_name.as_str(),
+                sanitize_field(&status.repo),
+                sanitize_field(&status.ref_name),
                 status.flags.to_string(),
             ),
-            None => ("0", "", "", String::new()),
+            None => ("0", String::new(), String::new(), String::new()),
         };
+        let pane_id = sanitize_field(&self.pane_id);
+        let cwd = sanitize_field(&self.cwd.display().to_string());
 
         format!(
             "herdrgit1\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            self.at,
-            self.pane_id,
-            self.cwd.display(),
-            present,
-            repo,
-            ref_name,
-            flags
+            self.at, pane_id, cwd, present, repo, ref_name, flags
         )
     }
+}
+
+fn sanitize_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| if character < ' ' { ' ' } else { character })
+        .collect()
 }
 
 impl fmt::Display for StatusFlags {
@@ -166,6 +170,25 @@ mod tests {
         assert_eq!(
             payload.encode_line(),
             "herdrgit1\t123\tw1:p1\t/tmp/project\t1\tproject\tmain\tdw\n"
+        );
+    }
+
+    #[test]
+    fn replaces_control_characters_before_encoding_payload_line() {
+        let payload = Payload {
+            at: 123,
+            pane_id: "w1\tp1".to_owned(),
+            cwd: "/tmp/project\nnested".into(),
+            repository: Some(RepositoryStatus {
+                repo: "pro\tject".to_owned(),
+                ref_name: "main\nnext".to_owned(),
+                flags: StatusFlags::default(),
+            }),
+        };
+
+        assert_eq!(
+            payload.encode_line(),
+            "herdrgit1\t123\tw1 p1\t/tmp/project nested\t1\tpro ject\tmain next\t\n"
         );
     }
 }

@@ -102,14 +102,23 @@ end
 local function read_git_info()
 	local focused = parse_payload(read_line(focused_cache_path()))
 	if not focused or focused.herdr_pane_id == "" then
-		return focused and focused.present and focused or nil
+		if focused and focused.present then
+			return focused
+		end
+		return nil
 	end
 
 	local pane = parse_payload(read_line(pane_cache_path(focused.herdr_pane_id)))
 	if pane and pane.herdr_pane_id == focused.herdr_pane_id and pane.at >= focused.at then
-		return pane.present and pane or nil
+		if pane.present then
+			return pane
+		end
+		return nil
 	end
-	return focused.present and focused or nil
+	if focused.present then
+		return focused
+	end
+	return nil
 end
 
 local function push_separator(segments, options)

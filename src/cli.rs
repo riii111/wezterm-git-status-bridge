@@ -134,7 +134,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{UpdateArgs, update};
+    use super::{CliError, UpdateArgs, resolve_context, update};
 
     #[test]
     fn update_writes_cache_from_explicit_context() {
@@ -152,5 +152,29 @@ mod tests {
         let global = fs::read_to_string(cache.path().join("herdr-git-info")).expect("read cache");
         assert!(global.contains("\tw1:p1\t"));
         assert!(global.contains("\t0\t\t\t\n"));
+    }
+
+    #[test]
+    fn rejects_pane_id_without_cwd() {
+        let error = resolve_context(&UpdateArgs {
+            pane_id: Some("w1:p1".to_owned()),
+            ..UpdateArgs::default()
+        })
+        .expect_err("partial context should fail");
+
+        assert!(matches!(error, CliError::PartialExplicitContext));
+    }
+
+    #[test]
+    fn rejects_cwd_without_pane_id() {
+        let cwd = TempDir::new().expect("create cwd");
+
+        let error = resolve_context(&UpdateArgs {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..UpdateArgs::default()
+        })
+        .expect_err("partial context should fail");
+
+        assert!(matches!(error, CliError::PartialExplicitContext));
     }
 }

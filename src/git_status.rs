@@ -13,24 +13,24 @@ pub enum GitStatusError {
 }
 
 pub fn collect(cwd: &Path) -> Result<Option<RepositoryStatus>, GitStatusError> {
-    let Some(root) = git_output(cwd, ["rev-parse", "--show-toplevel"])? else {
+    let Some(root) = git_output(cwd, &["rev-parse", "--show-toplevel"])? else {
         return Ok(None);
     };
-    let Some(git_dir) = git_output(cwd, ["rev-parse", "--path-format=absolute", "--git-dir"])?
+    let Some(git_dir) = git_output(cwd, &["rev-parse", "--path-format=absolute", "--git-dir"])?
     else {
         return Ok(None);
     };
     let Some(common_dir) = git_output(
         cwd,
-        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?
     else {
         return Ok(None);
     };
 
-    let (ref_name, detached) = match git_output(cwd, ["symbolic-ref", "--short", "HEAD"])? {
+    let (ref_name, detached) = match git_output(cwd, &["symbolic-ref", "--short", "HEAD"])? {
         Some(ref_name) => (ref_name, false),
-        None => match git_output(cwd, ["rev-parse", "--short", "HEAD"])? {
+        None => match git_output(cwd, &["rev-parse", "--short", "HEAD"])? {
             Some(ref_name) => (ref_name, true),
             None => return Ok(None),
         },
@@ -53,10 +53,7 @@ pub fn collect(cwd: &Path) -> Result<Option<RepositoryStatus>, GitStatusError> {
     }))
 }
 
-fn git_output<const N: usize>(
-    cwd: &Path,
-    args: [&'static str; N],
-) -> Result<Option<String>, GitStatusError> {
+fn git_output(cwd: &Path, args: &[&str]) -> Result<Option<String>, GitStatusError> {
     let output = Command::new("git").args(args).current_dir(cwd).output()?;
     if !output.status.success() {
         return Ok(None);
@@ -71,17 +68,8 @@ fn git_status_success(cwd: &Path, args: &[&str]) -> Result<bool, GitStatusError>
     Ok(status.success())
 }
 
-fn git_output_dynamic(cwd: &Path, args: &[&str]) -> Result<Option<String>, GitStatusError> {
-    let output = Command::new("git").args(args).current_dir(cwd).output()?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    Ok((!value.is_empty()).then_some(value))
-}
-
 fn is_dirty(cwd: &Path) -> Result<bool, GitStatusError> {
+    let _ = git_status_success(cwd, &["update-index", "-q", "--refresh"])?;
     if !git_status_success(cwd, &["diff", "--quiet"])? {
         return Ok(true);
     }
@@ -89,7 +77,7 @@ fn is_dirty(cwd: &Path) -> Result<bool, GitStatusError> {
         return Ok(true);
     }
 
-    let Some(untracked) = git_output_dynamic(
+    Ok(git_output(
         cwd,
         &[
             "ls-files",
@@ -99,11 +87,7 @@ fn is_dirty(cwd: &Path) -> Result<bool, GitStatusError> {
             "--no-empty-directory",
         ],
     )?
-    else {
-        return Ok(false);
-    };
-
-    Ok(!untracked.is_empty())
+    .is_some())
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -167,6 +151,19 @@ mod tests {
     fn marks_untracked_files_as_dirty() {
         let repo = test_repo();
         fs::write(repo.path().join("scratch.txt"), "scratch").expect("write untracked file");
+
+        let status = collect(repo.path())
+            .expect("collect status")
+            .expect("status");
+
+        assert!(status.flags.dirty());
+    }
+
+    #[test]
+    fn marks_staged_files_as_dirty() {
+        let repo = test_repo();
+        fs::write(repo.path().join("README.md"), "changed").expect("change tracked file");
+        git(repo.path(), ["add", "README.md"]);
 
         let status = collect(repo.path())
             .expect("collect status")
