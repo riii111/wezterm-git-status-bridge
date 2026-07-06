@@ -1,0 +1,37 @@
+name: Dependabot Auto-merge
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge Dependabot minor and patch updates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          prs=$(gh api "repos/${REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+            -H "Accept: application/vnd.github+json" \
+            --jq '.[] | select(.state == "open" and .user.login == "dependabot[bot]") | .number')
+
+          for pr in $prs; do
+            head_ref=$(gh pr view "$pr" --repo "$REPOSITORY" --json headRefName --jq '.headRefName')
+            case "$head_ref" in
+              dependabot/*/*minor-patch*) ;;
+              *) continue ;;
+            esac
+
+            gh pr merge "$pr" --repo "$REPOSITORY" --squash --delete-branch --match-head-commit "$HEAD_SHA"
+          done
