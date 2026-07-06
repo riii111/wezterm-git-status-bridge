@@ -1,0 +1,14 @@
+id = "local.wezterm-git-status-bridge"
+name = "WezTerm Git Status Bridge"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Expose focused Herdr pane git status to WezTerm without synchronous status subprocesses."
+platforms = ["macos"]
+
+[[events]]
+on = "pane.focused"
+command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/update-status\""]
+
+[[events]]
+on = "workspace.focused"
+command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/update-status\""]

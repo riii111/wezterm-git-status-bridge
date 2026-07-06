@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+if [ -n "${WEZTERM_GIT_STATUS_BRIDGE_BIN:-}" ]; then
+  bin=$WEZTERM_GIT_STATUS_BRIDGE_BIN
+elif command -v wezterm-git-status-bridge >/dev/null 2>&1; then
+  bin=$(command -v wezterm-git-status-bridge)
+else
+  echo "wezterm-git-status-bridge: set WEZTERM_GIT_STATUS_BRIDGE_BIN or install wezterm-git-status-bridge in PATH" >&2
+  exit 127
+fi
+
+if [ -n "${HERDR_PLUGIN_EVENT_JSON:-}" ]; then
+  exec "$bin" update
+fi
+
+if command -v herdr >/dev/null 2>&1; then
+  event_json=$(herdr pane list 2>/dev/null) || event_json=
+  if [ -n "$event_json" ]; then
+    exec "$bin" update --event-json "$event_json"
+  fi
+fi
+
+exec "$bin" update
