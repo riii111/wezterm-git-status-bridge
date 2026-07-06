@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+bin=${WEZTERM_GIT_STATUS_BRIDGE_BIN:-wezterm-git-status-bridge}
+herdr_bin=${HERDR_BIN_PATH:-herdr}
+
+exec "$bin" update --herdr-bin "$herdr_bin"
