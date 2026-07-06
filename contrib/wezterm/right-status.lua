@@ -9,6 +9,10 @@ local DEFAULTS = {
 	show_time = true,
 	always_show_time_separator = true,
 	max_age_seconds = 300,
+	auto_update = true,
+	update_interval_seconds = 2,
+	update_delay_seconds = 0.2,
+	binary_path = os.getenv("WEZTERM_GIT_STATUS_BRIDGE_BIN") or "wezterm-git-status-bridge",
 	status_bg = "#1f1f28",
 	mode_styles = nil,
 	show_git_for_pane = nil,
@@ -47,6 +51,13 @@ local function merge_options(options)
 			or options.always_show_time_separator,
 		cache_dir = options.cache_dir,
 		max_age_seconds = options.max_age_seconds == nil and DEFAULTS.max_age_seconds or options.max_age_seconds,
+		auto_update = options.auto_update == nil and DEFAULTS.auto_update or options.auto_update,
+		update_interval_seconds = options.update_interval_seconds == nil
+				and DEFAULTS.update_interval_seconds
+			or options.update_interval_seconds,
+		update_delay_seconds = options.update_delay_seconds == nil and DEFAULTS.update_delay_seconds
+			or options.update_delay_seconds,
+		binary_path = options.binary_path or DEFAULTS.binary_path,
 		now = options.now or os.time,
 		status_bg = options.status_bg == nil and DEFAULTS.status_bg or options.status_bg,
 		mode_styles = options.mode_styles,
@@ -60,6 +71,102 @@ local function merge_options(options)
 		time_suffix = options.time_suffix or DEFAULTS.time_suffix,
 		colors = colors,
 	}
+end
+
+local last_update_by_pane = {}
+
+local function decode_uri_path(value)
+	value = value:gsub("^file://[^/]*", "")
+	return value:gsub("%%(%x%x)", function(hex)
+		return string.char(tonumber(hex, 16))
+	end)
+end
+
+local function cwd_path(cwd)
+	if not cwd then
+		return nil
+	end
+	if type(cwd) == "string" then
+		return decode_uri_path(cwd)
+	end
+	if cwd.file_path then
+		local file_path = cwd.file_path
+		if type(file_path) == "function" then
+			local ok, value = pcall(function()
+				return cwd:file_path()
+			end)
+			if ok then
+				return value
+			end
+		elseif type(file_path) == "string" then
+			return file_path
+		end
+	end
+	if cwd.scheme and cwd.scheme ~= "file" then
+		return nil
+	end
+	return cwd.path and decode_uri_path(cwd.path) or nil
+end
+
+local function pane_cwd(pane)
+	if not pane or not pane.get_current_working_dir then
+		return nil
+	end
+	local ok, cwd = pcall(function()
+		return pane:get_current_working_dir()
+	end)
+	if not ok then
+		return nil
+	end
+	return cwd_path(cwd)
+end
+
+local function pane_id(pane)
+	if not pane or not pane.pane_id then
+		return nil
+	end
+	local ok, id = pcall(function()
+		return pane:pane_id()
+	end)
+	if not ok or id == nil then
+		return nil
+	end
+	return tostring(id)
+end
+
+local function refresh(pane, options)
+	if not options.auto_update then
+		return false
+	end
+	local id = pane_id(pane)
+	local cwd = pane_cwd(pane)
+	if not id or not cwd or cwd == "" then
+		return false
+	end
+
+	local now = options.now()
+	local last = last_update_by_pane[id]
+	if last and last.cwd == cwd and now - last.at < options.update_interval_seconds then
+		return false
+	end
+	last_update_by_pane[id] = { at = now, cwd = cwd }
+
+	local args = {
+		options.binary_path,
+		"update",
+		"--pane-id",
+		id,
+		"--cwd",
+		cwd,
+	}
+	if options.cache_dir and options.cache_dir ~= "" then
+		table.insert(args, "--cache-dir")
+		table.insert(args, options.cache_dir)
+	end
+	if not wezterm.background_child_process then
+		return false
+	end
+	return pcall(wezterm.background_child_process, args)
 end
 
 local function split_tabs(value)
@@ -232,6 +339,10 @@ function M.push_separator(segments, options)
 	push_separator(segments, merge_options(options))
 end
 
+function M.refresh(pane, options)
+	return refresh(pane, merge_options(options))
+end
+
 local function mode_segments(window, options)
 	local segments = {}
 	local ok, active_key_table = pcall(function()
@@ -299,6 +410,26 @@ local function render(window, pane, options)
 	window:set_right_status(wezterm.format(segments))
 end
 
+local function schedule_render(window, pane, options)
+	if not options.update_delay_seconds or options.update_delay_seconds <= 0 then
+		return
+	end
+	if not wezterm.time or not wezterm.time.call_after then
+		return
+	end
+	wezterm.time.call_after(options.update_delay_seconds, function()
+		render(window, pane, options)
+	end)
+end
+
+local function refresh_and_render(window, pane, options)
+	local updated = refresh(pane, options)
+	render(window, pane, options)
+	if updated then
+		schedule_render(window, pane, options)
+	end
+end
+
 function M.render(window, pane, options)
 	if options == nil and (pane == nil or type(pane) == "table") then
 		options = pane
@@ -315,19 +446,21 @@ function M.setup(options)
 
 	local merged = merge_options(options)
 	wezterm.on("update-right-status", function(window, pane)
-		render(window, pane, merged)
+		refresh_and_render(window, pane, merged)
 	end)
 	wezterm.on("render-right-status", function(window, pane)
-		render(window, pane or window:active_pane(), merged)
+		local active_pane = pane or window:active_pane()
+		refresh_and_render(window, active_pane, merged)
 	end)
 	wezterm.on("window-focus-changed", function(window, pane)
-		render(window, pane, merged)
+		refresh_and_render(window, pane, merged)
 	end)
 	wezterm.on("window-config-reloaded", function(window, pane)
+		local active_pane = pane or window:active_pane()
 		if merged.on_reload then
-			merged.on_reload(window, pane)
+			merged.on_reload(window, active_pane)
 		end
-		render(window, pane or window:active_pane(), merged)
+		refresh_and_render(window, active_pane, merged)
 	end)
 end
 

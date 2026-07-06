@@ -63,6 +63,7 @@ dirty_cache="$tmp/cache-dirty"
 non_repo_cache="$tmp/cache-non-repo"
 plain_cache="$tmp/cache-plain"
 plugin_cache_home="$tmp/cache-plugin"
+plugin_event_cache_home="$tmp/cache-plugin-event"
 plugin_no_focus_cache_home="$tmp/cache-plugin-no-focus"
 lua_scratch="$tmp/lua"
 fake_herdr="$tmp/herdr"
@@ -105,6 +106,20 @@ test "$cached_cwd" = "$clean_repo"
 test "$present" = "1"
 test "$repo" = "clean-repo"
 test "$ref" = "main"
+
+HERDR_PLUGIN_EVENT_JSON='{"event":"pane.focused"}' \
+	WEZTERM_GIT_STATUS_BRIDGE_BIN="$bin" \
+	HERDR_BIN_PATH="$fake_herdr" \
+	XDG_CACHE_HOME="$plugin_event_cache_home" \
+	sh "$root/contrib/herdr-plugin/update-status"
+
+plugin_event_cache="$plugin_event_cache_home/wezterm"
+test -f "$plugin_event_cache/herdr-git-info-by-pane/window_9:pane_3"
+IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$plugin_event_cache/herdr-git-info"
+test "$tag" = "herdrgit1"
+test "$cached_pane_id" = "window/9:pane/3"
+test "$cached_cwd" = "$clean_repo"
+test "$present" = "1"
 
 cat > "$fake_herdr" <<'EOF'
 #!/usr/bin/env sh

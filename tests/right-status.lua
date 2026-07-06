@@ -7,9 +7,19 @@ package.preload["wezterm"] = function()
 			_G.wezterm_handlers = _G.wezterm_handlers or {}
 			table.insert(_G.wezterm_handlers, { name = name, callback = callback })
 		end,
+		background_child_process = function(args)
+			_G.wezterm_background_processes = _G.wezterm_background_processes or {}
+			table.insert(_G.wezterm_background_processes, args)
+		end,
 		strftime = function()
 			return "Mon Jan 1 00:00"
 		end,
+		time = {
+			call_after = function(delay, callback)
+				_G.wezterm_timers = _G.wezterm_timers or {}
+				table.insert(_G.wezterm_timers, { delay = delay, callback = callback })
+			end,
+		},
 	}
 end
 
@@ -269,6 +279,112 @@ local function setup_is_idempotent()
 	assert_equal(#_G.wezterm_handlers, 4, "registered handlers")
 end
 
+local function setup_refreshes_active_pane_in_background()
+	_G.wezterm_handlers = {}
+	_G.wezterm_background_processes = {}
+	_G.wezterm_timers = {}
+	right_status._setup_done = nil
+
+	local cache = cache_dir("setup-refresh")
+	local pane = {
+		pane_id = function()
+			return 42
+		end,
+		get_current_working_dir = function()
+			return { scheme = "file", path = "/repo%20one" }
+		end,
+	}
+	local renders = 0
+	local window = {
+		set_right_status = function()
+			renders = renders + 1
+		end,
+	}
+
+	right_status.setup({
+		cache_dir = cache,
+		binary_path = "/bin/bridge",
+		now = function()
+			return 100
+		end,
+		show_time = false,
+	})
+	_G.wezterm_handlers[1].callback(window, pane)
+
+	local args = _G.wezterm_background_processes[1]
+	assert_equal(args[1], "/bin/bridge", "background binary")
+	assert_equal(args[2], "update", "background command")
+	assert_equal(args[4], "42", "background pane id")
+	assert_equal(args[6], "/repo one", "background cwd")
+	assert_equal(args[8], cache, "background cache dir")
+	assert_equal(renders, 1, "immediate render")
+	assert_equal(#_G.wezterm_timers, 1, "delayed render timer")
+	assert_equal(_G.wezterm_timers[1].delay, 0.2, "delayed render delay")
+	_G.wezterm_timers[1].callback()
+	assert_equal(renders, 2, "delayed render")
+end
+
+local function setup_throttles_background_refreshes()
+	_G.wezterm_handlers = {}
+	_G.wezterm_background_processes = {}
+	_G.wezterm_timers = {}
+	right_status._setup_done = nil
+
+	local pane = {
+		pane_id = function()
+			return 43
+		end,
+		get_current_working_dir = function()
+			return "/repo"
+		end,
+	}
+	local window = {
+		set_right_status = function() end,
+	}
+	local now = 100
+
+	right_status.setup({
+		cache_dir = cache_dir("setup-throttle"),
+		now = function()
+			return now
+		end,
+		show_time = false,
+	})
+	_G.wezterm_handlers[1].callback(window, pane)
+	now = 101
+	_G.wezterm_handlers[1].callback(window, pane)
+
+	assert_equal(#_G.wezterm_background_processes, 1, "throttled background refresh")
+end
+
+local function setup_can_disable_background_refreshes()
+	_G.wezterm_handlers = {}
+	_G.wezterm_background_processes = {}
+	_G.wezterm_timers = {}
+	right_status._setup_done = nil
+
+	local pane = {
+		pane_id = function()
+			return 42
+		end,
+		get_current_working_dir = function()
+			return "/repo"
+		end,
+	}
+	local window = {
+		set_right_status = function() end,
+	}
+
+	right_status.setup({
+		cache_dir = cache_dir("setup-disabled"),
+		auto_update = false,
+		show_time = false,
+	})
+	_G.wezterm_handlers[1].callback(window, pane)
+
+	assert_equal(#_G.wezterm_background_processes, 0, "disabled background refresh")
+end
+
 local function render_generated_cache(cache, now)
 	return segment_text(render_with_options(cache, {
 		now = function()
@@ -320,6 +436,9 @@ local function run_unit_assertions()
 	hides_git_when_pane_filter_rejects()
 	hides_absent_payload()
 	setup_is_idempotent()
+	setup_refreshes_active_pane_in_background()
+	setup_throttles_background_refreshes()
+	setup_can_disable_background_refreshes()
 end
 
 if arg[2] == "--e2e" then
