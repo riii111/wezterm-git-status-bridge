@@ -298,6 +298,11 @@ local function run_e2e_assertions()
 		"e2e dirty repository"
 	)
 	assert_equal(render_generated_cache(arg[11], tonumber(arg[12])), "", "e2e non-repository")
+	assert_equal(
+		render_generated_cache(arg[13], tonumber(arg[14])),
+		generated_git_text(arg[15], arg[16], false),
+		"e2e plain wezterm pane"
+	)
 end
 
 local function run_unit_assertions()
