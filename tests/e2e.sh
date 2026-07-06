@@ -62,7 +62,11 @@ clean_cache="$tmp/cache-clean"
 dirty_cache="$tmp/cache-dirty"
 non_repo_cache="$tmp/cache-non-repo"
 plain_cache="$tmp/cache-plain"
+plugin_cache_home="$tmp/cache-plugin"
+plugin_no_focus_cache_home="$tmp/cache-plugin-no-focus"
 lua_scratch="$tmp/lua"
+fake_herdr="$tmp/herdr"
+missing_bin_stderr="$tmp/missing-bin.stderr"
 
 setup_repo "$clean_repo"
 setup_repo "$dirty_repo"
@@ -75,6 +79,54 @@ run_update "$non_repo_cache" "$non_repo" "$pane_id" "$sanitized_pane_id"
 run_update "$plain_cache" "$clean_repo" "" "_"
 poison_global_cache "$clean_cache"
 poison_global_cache "$dirty_cache"
+
+cat > "$fake_herdr" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "pane" ] && [ "\$2" = "list" ]; then
+	printf '%s\n' '{"result":{"panes":[{"pane_id":"window/9:pane/3","focused":true,"foreground_cwd":"$clean_repo"}]}}'
+	exit 0
+fi
+exit 2
+EOF
+chmod +x "$fake_herdr"
+
+env -u HERDR_PLUGIN_EVENT_JSON \
+	WEZTERM_GIT_STATUS_BRIDGE_BIN="$bin" \
+	HERDR_BIN_PATH="$fake_herdr" \
+	XDG_CACHE_HOME="$plugin_cache_home" \
+	sh "$root/contrib/herdr-plugin/update-status"
+
+plugin_cache="$plugin_cache_home/wezterm"
+test -f "$plugin_cache/herdr-git-info-by-pane/window_9:pane_3"
+IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$plugin_cache/herdr-git-info"
+test "$tag" = "herdrgit1"
+test "$cached_pane_id" = "window/9:pane/3"
+test "$cached_cwd" = "$clean_repo"
+test "$present" = "1"
+test "$repo" = "clean-repo"
+test "$ref" = "main"
+
+cat > "$fake_herdr" <<'EOF'
+#!/usr/bin/env sh
+if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+	printf '%s\n' '{"result":{"panes":[{"pane_id":"window/9:pane/3","focused":false,"foreground_cwd":"/unused"}]}}'
+	exit 0
+fi
+exit 2
+EOF
+chmod +x "$fake_herdr"
+
+env -u HERDR_PLUGIN_EVENT_JSON \
+	WEZTERM_GIT_STATUS_BRIDGE_BIN="$bin" \
+	HERDR_BIN_PATH="$fake_herdr" \
+	XDG_CACHE_HOME="$plugin_no_focus_cache_home" \
+	sh "$root/contrib/herdr-plugin/update-status"
+test ! -e "$plugin_no_focus_cache_home/wezterm/herdr-git-info"
+
+if env -u WEZTERM_GIT_STATUS_BRIDGE_BIN PATH="$tmp/no-bin" /bin/sh "$root/contrib/herdr-plugin/update-status" 2>"$missing_bin_stderr"; then
+	exit 1
+fi
+grep -q "set WEZTERM_GIT_STATUS_BRIDGE_BIN or install wezterm-git-status-bridge in PATH" "$missing_bin_stderr"
 
 "$lua_bin" "$root/tests/right-status.lua" "$lua_scratch" --e2e \
 	"$clean_cache" "$(cache_now "$clean_cache")" clean-repo main \
