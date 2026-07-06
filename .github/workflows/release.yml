@@ -73,6 +73,7 @@ jobs:
           mkdir "$package"
           cp "target/${{ matrix.target }}/release/${BINARY_NAME}" "$package/"
           cp README.md LICENSE "$package/"
+          cp -R contrib "$package/"
           tar czf "${package}.tar.gz" "$package"
 
       - name: Package (Windows)
@@ -83,6 +84,7 @@ jobs:
           New-Item -ItemType Directory -Path $package
           Copy-Item "target/${{ matrix.target }}/release/${env:BINARY_NAME}.exe" "$package/"
           Copy-Item README.md,LICENSE "$package/"
+          Copy-Item contrib "$package/" -Recurse
           Compress-Archive -Path $package -DestinationPath "$package.zip"
 
       - name: Generate checksum (Unix)

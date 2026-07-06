@@ -1,40 +1,83 @@
 # wezterm-git-status-bridge
+
 <img width="507" height="173" alt="image" src="https://github.com/user-attachments/assets/757f2ad4-c2fc-4ec1-a33c-35fccf06c1e0" />
 
-Bridge focused Herdr pane Git status into WezTerm right-status rendering.
+Show Git repository status in WezTerm's right status without running `git` from WezTerm's render path.
 
-## Components
-
-- Rust CLI: updates the cache files consumed by WezTerm.
-- Herdr plugin: runs the CLI on pane and workspace events.
-- WezTerm Lua module: reads the cache and renders the right status.
+The bridge writes Git status to a cache file, and the Lua module renders from that cache. It shows the repository, branch or detached commit, dirty state, linked worktree state, and rebase or cherry-pick state.
 
 ## Requirements
 
+- WezTerm
 - `git`
-- [Herdr](https://herdr.dev) 0.7.0 or newer
-- WezTerm with reasonably recent bundled Nerd Font symbols
-- macOS for the bundled Herdr plugin
+- `wezterm-git-status-bridge`
 
-## Usage
+Herdr is optional. The bundled Herdr plugin keeps the cache updated from the focused pane, but any hook can call the binary with a pane id and working directory.
 
-Install the binary somewhere in `PATH`, then install the Herdr plugin from `contrib/herdr-plugin`.
+## Setup
+
+1. Install the binary.
+
+   Download a release archive, extract it, and put the included binary in `PATH`.
+
+2. Copy the Lua module into your WezTerm configuration directory.
+
+   Use the included `contrib/wezterm/right-status.lua`, then load it from `wezterm.lua`:
+
+   ```lua
+   local git_status = require("right-status")
+
+   git_status.setup()
+   ```
+
+   If you already manage `update-right-status`, compose the segments yourself:
+
+   ```lua
+   local wezterm = require("wezterm")
+   local git_status = require("right-status")
+
+   wezterm.on("update-right-status", function(window, pane)
+     window:set_right_status(wezterm.format(git_status.segments(window, pane)))
+   end)
+   ```
+
+3. Keep the cache updated.
+
+   With Herdr, install the included `contrib/herdr-plugin` plugin and reload Herdr. If the binary is not in `PATH`, set `WEZTERM_GIT_STATUS_BRIDGE_BIN`.
+
+   Without Herdr, call the binary from a shell hook, editor hook, or terminal automation:
+
+   ```sh
+   wezterm-git-status-bridge update --pane-id <stable-pane-id> --cwd <working-directory>
+   ```
+
+4. Reload WezTerm.
+
+## Notes
+
+For a manual one-off update:
 
 ```sh
 wezterm-git-status-bridge update --pane-id manual --cwd "$PWD"
+```
+
+For Nix:
+
+```sh
 nix run github:riii111/wezterm-git-status-bridge -- update --pane-id manual --cwd "$PWD"
 ```
 
-Install `contrib/wezterm/right-status.lua` in your WezTerm configuration directory and load it from `wezterm.lua`:
+Lua options:
 
 ```lua
-local git_status = require("right-status")
-git_status.setup()
+git_status.setup({
+  max_age_seconds = 300,
+  show_time = true,
+  time_format = "%a %b %e %H:%M",
+})
 ```
 
-`setup()` registers `update-right-status`, `window-focus-changed`, `window-config-reloaded`, and a custom `render-right-status` event. Emit `render-right-status` from your own key bindings when you need an immediate redraw.
-
-Common Lua options:
+Common options:
 
 | Option | Default |
 | --- | --- |
@@ -46,38 +89,3 @@ Common Lua options:
 | `status_bg` | `#1f1f28`; applied after a mode label, set `false` to disable |
 | `show_git_for_pane` | `nil`; optional pane filter, may receive `nil` |
 | `time_format` | `%a %b %e %H:%M` |
-
-For custom composition, use `git_segments(options)`, `mode_segments(window, options)`, or `segments(window, pane, options)` and pass the result to `wezterm.format`.
-
-The binary writes these cache files:
-
-- `herdr-git-info`: latest focused Herdr pane status
-- `herdr-git-info-by-pane/<pane-id>`: latest status per Herdr pane
-
-Payloads use a tab-separated `herdrgit1` line so WezTerm can render synchronously without spawning `git`.
-
-Flags are encoded as `D` for detached HEAD, `d` for dirty, `w` for worktree, `R` for rebase, and `C` for cherry-pick.
-
-The status is a snapshot from the latest Herdr pane event. It does not update while focus stays on the same pane unless another Herdr event runs the bridge.
-
-The update command resolves pane context in this order:
-
-1. `--pane-id` and `--cwd`
-2. `--event-json`
-3. `HERDR_PLUGIN_EVENT_JSON`
-
-Set `WEZTERM_GIT_STATUS_BRIDGE_BIN` when the Herdr plugin should use a binary outside `PATH`.
-The Herdr plugin uses `HERDR_PLUGIN_EVENT_JSON` when available and falls back to `herdr pane list`.
-
-## Development
-
-```sh
-nix develop
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-cargo build --release
-lua tests/right-status.lua "$(mktemp -d)"
-cargo audit
-cargo machete
-```
