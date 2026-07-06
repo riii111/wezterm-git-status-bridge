@@ -84,7 +84,7 @@ Common options:
 | `auto_update` | `true`; set `false` when another integration writes the cache |
 | `binary_path` | `WEZTERM_GIT_STATUS_BRIDGE_BIN` or `wezterm-git-status-bridge` |
 | `update_interval_seconds` | `2`; minimum seconds between background updates for the same pane and directory |
-| `update_delay_seconds` | `0.2`; delay before redrawing after a background update request |
+| `update_delay_seconds` | `0.2`; best-effort redraw delay after a background update request |
 | `max_age_seconds` | `300`; set `false` to disable TTL hiding |
 | `separator` | Powerline separator with spacing |
 | `show_time` | `true` |

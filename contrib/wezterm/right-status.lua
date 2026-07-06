@@ -75,11 +75,43 @@ end
 
 local last_update_by_pane = {}
 
-local function decode_uri_path(value)
-	value = value:gsub("^file://[^/]*", "")
+local function decode_percent(value)
 	return value:gsub("%%(%x%x)", function(hex)
 		return string.char(tonumber(hex, 16))
 	end)
+end
+
+local function wezterm_hostname()
+	if not wezterm.hostname then
+		return nil
+	end
+	local ok, value = pcall(wezterm.hostname)
+	if ok and value and value ~= "" then
+		return value
+	end
+	return nil
+end
+
+local function is_local_host(host)
+	if not host or host == "" or host == "localhost" or host == "127.0.0.1" or host == "::1" then
+		return true
+	end
+	local hostname = wezterm_hostname() or os.getenv("HOSTNAME")
+	if not hostname or hostname == "" then
+		return false
+	end
+	return host == hostname or host == hostname:match("^[^.]+$")
+end
+
+local function decode_uri_path(value)
+	local host, path = value:match("^file://([^/]*)(/.*)$")
+	if path then
+		if not is_local_host(host) then
+			return nil
+		end
+		return decode_percent(path)
+	end
+	return decode_percent(value)
 end
 
 local function cwd_path(cwd)
@@ -88,6 +120,12 @@ local function cwd_path(cwd)
 	end
 	if type(cwd) == "string" then
 		return decode_uri_path(cwd)
+	end
+	if cwd.scheme and cwd.scheme ~= "file" then
+		return nil
+	end
+	if not is_local_host(cwd.host) then
+		return nil
 	end
 	if cwd.file_path then
 		local file_path = cwd.file_path
@@ -101,9 +139,6 @@ local function cwd_path(cwd)
 		elseif type(file_path) == "string" then
 			return file_path
 		end
-	end
-	if cwd.scheme and cwd.scheme ~= "file" then
-		return nil
 	end
 	return cwd.path and decode_uri_path(cwd.path) or nil
 end
@@ -166,7 +201,8 @@ local function refresh(pane, options)
 		table.insert(args, "--cache-dir")
 		table.insert(args, options.cache_dir)
 	end
-	return pcall(wezterm.background_child_process, args)
+	local ok = pcall(wezterm.background_child_process, args)
+	return ok
 end
 
 local function split_tabs(value)
@@ -422,8 +458,24 @@ local function schedule_render(window, pane, options)
 	end)
 end
 
+local function window_is_focused(window)
+	if not window or not window.is_focused then
+		return true
+	end
+	local ok, focused = pcall(function()
+		return window:is_focused()
+	end)
+	if not ok then
+		return true
+	end
+	return focused
+end
+
 local function refresh_and_render(window, pane, options)
-	local updated = refresh(pane, options)
+	local updated = false
+	if window_is_focused(window) then
+		updated = refresh(pane, options)
+	end
 	render(window, pane, options)
 	if updated then
 		schedule_render(window, pane, options)

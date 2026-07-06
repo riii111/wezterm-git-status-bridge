@@ -11,6 +11,9 @@ package.preload["wezterm"] = function()
 			_G.wezterm_background_processes = _G.wezterm_background_processes or {}
 			table.insert(_G.wezterm_background_processes, args)
 		end,
+		hostname = function()
+			return "local-host"
+		end,
 		strftime = function()
 			return "Mon Jan 1 00:00"
 		end,
@@ -296,6 +299,9 @@ local function setup_refreshes_active_pane_in_background()
 	}
 	local renders = 0
 	local window = {
+		is_focused = function()
+			return true
+		end,
 		set_right_status = function()
 			renders = renders + 1
 		end,
@@ -322,6 +328,41 @@ local function setup_refreshes_active_pane_in_background()
 	assert_equal(_G.wezterm_timers[1].delay, 0.2, "delayed render delay")
 	_G.wezterm_timers[1].callback()
 	assert_equal(renders, 2, "delayed render")
+end
+
+local function setup_does_not_refresh_unfocused_window()
+	_G.wezterm_handlers = {}
+	_G.wezterm_background_processes = {}
+	_G.wezterm_timers = {}
+	right_status._setup_done = nil
+
+	local pane = {
+		pane_id = function()
+			return 45
+		end,
+		get_current_working_dir = function()
+			return "/repo"
+		end,
+	}
+	local renders = 0
+	local window = {
+		is_focused = function()
+			return false
+		end,
+		set_right_status = function()
+			renders = renders + 1
+		end,
+	}
+
+	right_status.setup({
+		cache_dir = cache_dir("setup-unfocused"),
+		show_time = false,
+	})
+	_G.wezterm_handlers[1].callback(window, pane)
+
+	assert_equal(#_G.wezterm_background_processes, 0, "unfocused background refresh")
+	assert_equal(#_G.wezterm_timers, 0, "unfocused delayed render")
+	assert_equal(renders, 1, "unfocused render")
 end
 
 local function setup_throttles_background_refreshes()
@@ -417,6 +458,46 @@ local function refresh_without_background_api_does_not_throttle()
 	assert_equal(#_G.wezterm_background_processes, 1, "retry process count")
 end
 
+local function refresh_rejects_remote_cwd()
+	_G.wezterm_background_processes = {}
+	local remote_file_pane = {
+		pane_id = function()
+			return 46
+		end,
+		get_current_working_dir = function()
+			return { scheme = "file", host = "remote-host", path = "/repo" }
+		end,
+	}
+	local non_file_pane = {
+		pane_id = function()
+			return 47
+		end,
+		get_current_working_dir = function()
+			return {
+				scheme = "ssh",
+				host = "remote-host",
+				file_path = function()
+					return "/repo"
+				end,
+			}
+		end,
+	}
+	local local_file_pane = {
+		pane_id = function()
+			return 48
+		end,
+		get_current_working_dir = function()
+			return { scheme = "file", host = "local-host", path = "/repo%20one" }
+		end,
+	}
+
+	assert_equal(right_status.refresh(remote_file_pane), false, "remote file cwd")
+	assert_equal(right_status.refresh(non_file_pane), false, "non-file cwd")
+	assert_equal(right_status.refresh(local_file_pane), true, "local file cwd")
+	assert_equal(#_G.wezterm_background_processes, 1, "local refresh count")
+	assert_equal(_G.wezterm_background_processes[1][6], "/repo one", "local decoded cwd")
+end
+
 local function render_generated_cache(cache, now)
 	return segment_text(render_with_options(cache, {
 		now = function()
@@ -469,9 +550,11 @@ local function run_unit_assertions()
 	hides_absent_payload()
 	setup_is_idempotent()
 	setup_refreshes_active_pane_in_background()
+	setup_does_not_refresh_unfocused_window()
 	setup_throttles_background_refreshes()
 	setup_can_disable_background_refreshes()
 	refresh_without_background_api_does_not_throttle()
+	refresh_rejects_remote_cwd()
 end
 
 if arg[2] == "--e2e" then
