@@ -1,0 +1,1 @@
+# wezterm-git-status-bridge
