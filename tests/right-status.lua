@@ -269,17 +269,61 @@ local function setup_is_idempotent()
 	assert_equal(#_G.wezterm_handlers, 4, "registered handlers")
 end
 
-renders_focused_payload()
-hides_stale_payload()
-can_disable_stale_payload_ttl()
-ignores_invalid_payloads()
-prefers_newer_per_pane_payload()
-uses_sanitized_per_pane_path()
-uses_slash_sanitized_per_pane_path()
-exposes_composable_git_segments()
-renders_detached_rebase_and_pick_flags()
-treats_two_argument_table_as_options()
-renders_mode_git_and_time()
-hides_git_when_pane_filter_rejects()
-hides_absent_payload()
-setup_is_idempotent()
+local function render_generated_cache(cache, now)
+	return segment_text(render_with_options(cache, {
+		now = function()
+			return now
+		end,
+		show_time = false,
+	}))
+end
+
+local function generated_git_text(repo, ref, dirty)
+	local text = "  " .. repo .. default_separator .. " " .. ref
+	if dirty then
+		return text .. " *"
+	end
+	return text
+end
+
+local function run_e2e_assertions()
+	assert_equal(
+		render_generated_cache(arg[3], tonumber(arg[4])),
+		generated_git_text(arg[5], arg[6], false),
+		"e2e clean repository"
+	)
+	assert_equal(
+		render_generated_cache(arg[7], tonumber(arg[8])),
+		generated_git_text(arg[9], arg[10], true),
+		"e2e dirty repository"
+	)
+	assert_equal(render_generated_cache(arg[11], tonumber(arg[12])), "", "e2e non-repository")
+	assert_equal(
+		render_generated_cache(arg[13], tonumber(arg[14])),
+		generated_git_text(arg[15], arg[16], false),
+		"e2e plain wezterm pane"
+	)
+end
+
+local function run_unit_assertions()
+	renders_focused_payload()
+	hides_stale_payload()
+	can_disable_stale_payload_ttl()
+	ignores_invalid_payloads()
+	prefers_newer_per_pane_payload()
+	uses_sanitized_per_pane_path()
+	uses_slash_sanitized_per_pane_path()
+	exposes_composable_git_segments()
+	renders_detached_rebase_and_pick_flags()
+	treats_two_argument_table_as_options()
+	renders_mode_git_and_time()
+	hides_git_when_pane_filter_rejects()
+	hides_absent_payload()
+	setup_is_idempotent()
+end
+
+if arg[2] == "--e2e" then
+	run_e2e_assertions()
+else
+	run_unit_assertions()
+end
