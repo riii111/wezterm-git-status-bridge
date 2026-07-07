@@ -10,10 +10,6 @@ else
   exit 127
 fi
 
-if [ -n "${HERDR_PLUGIN_EVENT_JSON:-}" ]; then
-  exec "$bin" update
-fi
-
 herdr_bin=
 if [ -n "${HERDR_BIN_PATH:-}" ]; then
   herdr_bin=$HERDR_BIN_PATH
@@ -26,6 +22,10 @@ if [ -n "$herdr_bin" ]; then
   if [ -n "$event_json" ]; then
     exec "$bin" update --event-json "$event_json"
   fi
+fi
+
+if [ -n "${HERDR_PLUGIN_EVENT_JSON:-}" ]; then
+  exec "$bin" update --event-json "$HERDR_PLUGIN_EVENT_JSON"
 fi
 
 exec "$bin" update

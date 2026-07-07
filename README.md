@@ -12,7 +12,7 @@ The bridge writes Git status to a cache file, and the Lua module renders from th
 - `git`
 - `wezterm-git-status-bridge`
 
-Herdr is optional. The bundled Herdr plugin keeps the cache updated from the focused pane, but any hook can call the binary with a pane id and working directory.
+Herdr is optional. WezTerm can update the cache by itself; the Herdr plugin is only for users who want status from the focused pane inside Herdr.
 
 ## Setup
 
@@ -30,28 +30,21 @@ Herdr is optional. The bundled Herdr plugin keeps the cache updated from the foc
    git_status.setup()
    ```
 
-   If you already manage `update-right-status`, compose the segments yourself:
+   If you already manage `update-right-status`, refresh the cache before composing the segments:
 
    ```lua
    local wezterm = require("wezterm")
    local git_status = require("right-status")
 
    wezterm.on("update-right-status", function(window, pane)
+     if window:is_focused() then
+       git_status.refresh(pane)
+     end
      window:set_right_status(wezterm.format(git_status.segments(window, pane)))
    end)
    ```
 
-3. Keep the cache updated.
-
-   With Herdr, install the included `contrib/herdr-plugin` plugin and reload Herdr. If the binary is not in `PATH`, set `WEZTERM_GIT_STATUS_BRIDGE_BIN`.
-
-   Without Herdr, call the binary from a shell hook, editor hook, or terminal automation:
-
-   ```sh
-   wezterm-git-status-bridge update --pane-id <stable-pane-id> --cwd <working-directory>
-   ```
-
-4. Reload WezTerm.
+3. Reload WezTerm.
 
 ## Notes
 
@@ -71,9 +64,18 @@ Lua options:
 
 ```lua
 git_status.setup({
+  auto_update = true,
   max_age_seconds = 300,
   show_time = true,
   time_format = "%a %b %e %H:%M",
+})
+```
+
+Herdr users can install the included `contrib/herdr-plugin` plugin and disable WezTerm-side updates:
+
+```lua
+git_status.setup({
+  auto_update = false,
 })
 ```
 
@@ -81,6 +83,10 @@ Common options:
 
 | Option | Default |
 | --- | --- |
+| `auto_update` | `true`; set `false` when another integration writes the cache |
+| `binary_path` | `WEZTERM_GIT_STATUS_BRIDGE_BIN` or `wezterm-git-status-bridge` |
+| `update_interval_seconds` | `2`; minimum seconds between background updates for the same pane and directory |
+| `update_delay_seconds` | `0.2`; best-effort redraw delay after a background update request |
 | `max_age_seconds` | `300`; set `false` to disable TTL hiding |
 | `separator` | Powerline separator with spacing |
 | `show_time` | `true` |
