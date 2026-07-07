@@ -158,9 +158,45 @@ exit 2
 EOF
 chmod +x "$fake_herdr"
 
+mkdir -p "$setup_wezterm_dir"
+cat > "$setup_wezterm_dir/wezterm.lua" <<'EOF'
+local config = {}
+-- wezterm-git-status-bridge setup begin
+local git_status = require("right-status")
+git_status.setup({
+  auto_update = true,
+  binary_path = "/old/bin/wezterm-git-status-bridge",
+  separator = "}",
+  time_format = "function %H end",
+  -- }) function end
+  on_reload = function(window, pane)
+    window:set_config_overrides({
+      colors = {
+        tab_bar = { background = "#1f2335" },
+      },
+    })
+    window:set_right_status("mode")
+  end,
+  mode_styles = {
+    resize = { label = "RESIZE", bg = "#7aa2f7", fg = "#1f2335" },
+  },
+})
+-- wezterm-git-status-bridge setup end
+return config
+EOF
+
 "$bin" setup --herdr --herdr-bin "$fake_herdr" --wezterm-config-dir "$setup_wezterm_dir" --zshrc "$setup_zshrc"
 test -f "$setup_wezterm_dir/right-status.lua"
 test -f "$setup_wezterm_dir/wezterm.lua"
+grep -q -- 'separator = "}"' "$setup_wezterm_dir/wezterm.lua"
+grep -q -- 'time_format = "function %H end"' "$setup_wezterm_dir/wezterm.lua"
+grep -q -- 'window:set_config_overrides({' "$setup_wezterm_dir/wezterm.lua"
+grep -q -- 'mode_styles = {' "$setup_wezterm_dir/wezterm.lua"
+grep -q -- 'on_reload = function(window, pane)' "$setup_wezterm_dir/wezterm.lua"
+grep -q -- 'auto_update = false' "$setup_wezterm_dir/wezterm.lua"
+if grep -q -- '/old/bin/wezterm-git-status-bridge' "$setup_wezterm_dir/wezterm.lua"; then
+	exit 1
+fi
 grep -q -- '--cwd "$PWD"' "$setup_zshrc"
 if grep -q -- 'pane list' "$setup_zshrc"; then
 	exit 1

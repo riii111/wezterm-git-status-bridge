@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -125,8 +126,16 @@ fn write_file(path: &Path, value: &str) -> Result<(), SetupError> {
 }
 
 fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result<(), SetupError> {
-    let block = wezterm_block(herdr, binary_path);
-    let next = match read_optional(path)? {
+    let current = read_optional(path)?;
+    let block = current
+        .as_deref()
+        .and_then(existing_marked_lua_block)
+        .and_then(preserved_setup_options)
+        .map_or_else(
+            || wezterm_block(herdr, binary_path),
+            |options| wezterm_block_with_options(herdr, binary_path, &options),
+        );
+    let next = match current {
         Some(current) => upsert_lua_block(&current, &block),
         None => new_wezterm_config(&block),
     };
@@ -134,16 +143,29 @@ fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result
 }
 
 fn wezterm_block(herdr: bool, binary_path: &Path) -> String {
+    wezterm_block_with_options(herdr, binary_path, &[])
+}
+
+fn wezterm_block_with_options(
+    herdr: bool,
+    binary_path: &Path,
+    preserved_options: &[String],
+) -> String {
     let escaped_binary = lua_string(binary_path);
+    let mut block = String::new();
+    block.push_str(SETUP_BEGIN);
+    block.push_str("\nlocal git_status = require(\"right-status\")\ngit_status.setup({\n");
     if herdr {
-        format!(
-            "{SETUP_BEGIN}\nlocal git_status = require(\"right-status\")\ngit_status.setup({{\n  auto_update = false,\n  binary_path = {escaped_binary},\n}})\n{SETUP_END}"
-        )
-    } else {
-        format!(
-            "{SETUP_BEGIN}\nlocal git_status = require(\"right-status\")\ngit_status.setup({{\n  binary_path = {escaped_binary},\n}})\n{SETUP_END}"
-        )
+        block.push_str("  auto_update = false,\n");
     }
+    let _ = writeln!(block, "  binary_path = {escaped_binary},");
+    for option in preserved_options {
+        block.push_str(option);
+        block.push('\n');
+    }
+    block.push_str("})\n");
+    block.push_str(SETUP_END);
+    block
 }
 
 fn lua_string(path: &Path) -> String {
@@ -175,6 +197,214 @@ fn upsert_lua_block(current: &str, block: &str) -> String {
     let mut next = lines.join("\n");
     next.push('\n');
     next
+}
+
+fn existing_marked_lua_block(current: &str) -> Option<&str> {
+    marked_block(current, SETUP_BEGIN, SETUP_END)
+}
+
+fn marked_block<'a>(current: &'a str, begin: &str, end: &str) -> Option<&'a str> {
+    let start = current.find(begin)?;
+    let end_start = current[start..].find(end)? + start;
+    let end_index = end_start + end.len();
+    Some(&current[start..end_index])
+}
+
+fn preserved_setup_options(block: &str) -> Option<Vec<String>> {
+    let lines = block.lines().collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|line| line.contains("git_status.setup({"))?;
+    let end = setup_table_end(&lines, start)?;
+
+    let mut preserved = Vec::new();
+    let mut nesting = LuaNesting::setup_table();
+    for line in &lines[start + 1..end] {
+        if nesting.is_setup_table_top_level() && is_managed_setup_option(line) {
+            continue;
+        }
+        preserved.push((*line).to_owned());
+        nesting.update(line);
+    }
+
+    trim_blank_edges(&mut preserved);
+    Some(preserved)
+}
+
+fn setup_table_end(lines: &[&str], setup_start: usize) -> Option<usize> {
+    let mut nesting = LuaNesting::setup_table();
+    for (index, line) in lines.iter().enumerate().skip(setup_start + 1) {
+        nesting.update(line);
+        if nesting.is_setup_table_closed() {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn is_managed_setup_option(line: &str) -> bool {
+    matches!(
+        top_level_option_key(line),
+        Some("auto_update" | "binary_path")
+    )
+}
+
+fn top_level_option_key(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let mut end = 0;
+    for (index, character) in trimmed.char_indices() {
+        if index == 0 {
+            if !(character == '_' || character.is_ascii_alphabetic()) {
+                return None;
+            }
+        } else if !(character == '_' || character.is_ascii_alphanumeric()) {
+            break;
+        }
+        end = index + character.len_utf8();
+    }
+    if end == 0 {
+        return None;
+    }
+    trimmed[end..]
+        .trim_start()
+        .starts_with('=')
+        .then_some(&trimmed[..end])
+}
+
+#[derive(Default)]
+struct LuaNesting {
+    table_depth: usize,
+    function_depth: usize,
+    long_bracket_equals: Option<usize>,
+}
+
+impl LuaNesting {
+    fn setup_table() -> Self {
+        Self {
+            table_depth: 1,
+            ..Self::default()
+        }
+    }
+
+    fn is_setup_table_top_level(&self) -> bool {
+        self.table_depth == 1 && self.function_depth == 0 && self.long_bracket_equals.is_none()
+    }
+
+    fn is_setup_table_closed(&self) -> bool {
+        self.table_depth == 0 && self.function_depth == 0 && self.long_bracket_equals.is_none()
+    }
+
+    fn update(&mut self, line: &str) {
+        let code = lua_code_for_nesting(line, &mut self.long_bracket_equals);
+        self.table_depth = self
+            .table_depth
+            .saturating_add(code.chars().filter(|character| *character == '{').count())
+            .saturating_sub(code.chars().filter(|character| *character == '}').count());
+
+        self.function_depth = self
+            .function_depth
+            .saturating_add(count_lua_word(&code, "function"))
+            .saturating_sub(count_lua_word(&code, "end"));
+    }
+}
+
+fn lua_code_for_nesting(line: &str, long_bracket_equals: &mut Option<usize>) -> String {
+    let bytes = line.as_bytes();
+    let mut code = String::with_capacity(line.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(equals) = *long_bracket_equals {
+            if let Some(close_end) = long_bracket_close_end(bytes, index, equals) {
+                *long_bracket_equals = None;
+                index = close_end;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+
+        if bytes[index] == b'-' && bytes.get(index + 1) == Some(&b'-') {
+            if let Some((equals, open_end)) = long_bracket_open_end(bytes, index + 2) {
+                *long_bracket_equals = Some(equals);
+                index = open_end;
+                continue;
+            }
+            break;
+        }
+
+        if bytes[index] == b'\'' || bytes[index] == b'"' {
+            index = short_string_end(bytes, index + 1, bytes[index]);
+            code.push(' ');
+            continue;
+        }
+
+        if let Some((equals, open_end)) = long_bracket_open_end(bytes, index) {
+            *long_bracket_equals = Some(equals);
+            index = open_end;
+            code.push(' ');
+            continue;
+        }
+
+        let character = line[index..]
+            .chars()
+            .next()
+            .expect("index is within string bounds");
+        code.push(character);
+        index += character.len_utf8();
+    }
+    code
+}
+
+fn long_bracket_open_end(bytes: &[u8], index: usize) -> Option<(usize, usize)> {
+    if bytes.get(index) != Some(&b'[') {
+        return None;
+    }
+    let mut cursor = index + 1;
+    while bytes.get(cursor) == Some(&b'=') {
+        cursor += 1;
+    }
+    (bytes.get(cursor) == Some(&b'[')).then_some((cursor - index - 1, cursor + 1))
+}
+
+fn long_bracket_close_end(bytes: &[u8], index: usize, equals: usize) -> Option<usize> {
+    if bytes.get(index) != Some(&b']') {
+        return None;
+    }
+    let mut cursor = index + 1;
+    for _ in 0..equals {
+        if bytes.get(cursor) != Some(&b'=') {
+            return None;
+        }
+        cursor += 1;
+    }
+    (bytes.get(cursor) == Some(&b']')).then_some(cursor + 1)
+}
+
+fn short_string_end(bytes: &[u8], mut index: usize, quote: u8) -> usize {
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index = index.saturating_add(2),
+            value if value == quote => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+fn count_lua_word(value: &str, word: &str) -> usize {
+    value
+        .split(|character: char| !(character == '_' || character.is_ascii_alphanumeric()))
+        .filter(|part| *part == word)
+        .count()
+}
+
+fn trim_blank_edges(lines: &mut Vec<String>) {
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
 }
 
 fn replace_marked_block(current: &str, begin: &str, end: &str, block: &str) -> Option<String> {
@@ -374,6 +604,67 @@ mod tests {
                 .join(".config/wezterm/right-status.lua")
                 .is_file()
         );
+    }
+
+    #[test]
+    fn setup_preserves_custom_lua_options() {
+        let temp = TempDir::new().expect("create temp dir");
+        let config_dir = temp.path().join("wezterm");
+        let config_file = config_dir.join("wezterm.lua");
+        let herdr = temp.path().join("herdr");
+        write_script(&herdr, "exit 0\n");
+
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::write(
+            &config_file,
+            r##"local config = {}
+-- wezterm-git-status-bridge setup begin
+local git_status = require("right-status")
+git_status.setup({
+  auto_update = true,
+  binary_path = "/old/bin/wezterm-git-status-bridge",
+  separator = "}",
+  time_format = "function %H end",
+  -- }) function end
+  on_reload = function(window, pane)
+    window:set_config_overrides({
+      colors = {
+        tab_bar = { background = "#1f2335" },
+      },
+    })
+    window:set_right_status("mode")
+  end,
+  mode_styles = {
+    resize = { label = "RESIZE", bg = "#7aa2f7", fg = "#1f2335" },
+  },
+})
+-- wezterm-git-status-bridge setup end
+return config
+"##,
+        )
+        .expect("write config");
+
+        super::run(&SetupArgs {
+            wezterm_config_dir: Some(config_dir),
+            wezterm_config_file: Some(config_file.clone()),
+            herdr: true,
+            herdr_bin: Some(herdr),
+            no_shell_hook: true,
+            ..SetupArgs::default()
+        })
+        .expect("run setup");
+
+        let config = std::fs::read_to_string(config_file).expect("read config");
+        assert!(config.contains("auto_update = false"));
+        assert!(config.contains("separator = \"}\""));
+        assert!(config.contains("time_format = \"function %H end\""));
+        assert!(config.contains("window:set_config_overrides({"));
+        assert!(config.contains("tab_bar = { background = \"#1f2335\""));
+        assert!(config.contains("mode_styles = {"));
+        assert!(config.contains("resize = { label = \"RESIZE\""));
+        assert!(config.contains("on_reload = function(window, pane)"));
+        assert!(config.contains("window:set_right_status(\"mode\")"));
+        assert!(!config.contains("/old/bin/wezterm-git-status-bridge"));
     }
 
     #[test]
