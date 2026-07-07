@@ -14,70 +14,100 @@ The bridge writes Git status to a cache file, and the Lua module renders from th
 
 Herdr is optional. WezTerm can update the cache by itself; the Herdr plugin is only for users who want status from the focused pane inside Herdr.
 
-## Setup
+## Setup on macOS
 
-1. Install the binary.
+1. Install the binary and Lua module.
 
-   Download a release archive, extract it, and put the included binary in `PATH`.
-
-2. Copy the Lua module into your WezTerm configuration directory.
-
-   Use the included `contrib/wezterm/right-status.lua`, then load it from `wezterm.lua`:
-
-   ```lua
-   local git_status = require("right-status")
-
-   git_status.setup()
+   ```sh
+   version=v0.2.0
+   arch=$(uname -m)
+   case "$arch" in
+     arm64) target=aarch64-apple-darwin ;;
+     x86_64) target=x86_64-apple-darwin ;;
+     *) echo "unsupported macOS arch: $arch" >&2; exit 1 ;;
+   esac
+   mkdir -p "$HOME/.local/bin"
+   mkdir -p "$HOME/.config/wezterm"
+   curl -L "https://github.com/riii111/wezterm-git-status-bridge/releases/download/$version/wezterm-git-status-bridge-$target.tar.gz" |
+     tar xz -C /tmp
+   install -m 0755 "/tmp/wezterm-git-status-bridge-$target/wezterm-git-status-bridge" "$HOME/.local/bin/"
+   cp "/tmp/wezterm-git-status-bridge-$target/contrib/wezterm/right-status.lua" "$HOME/.config/wezterm/"
    ```
 
-   If you already manage `update-right-status`, refresh the cache before composing the segments:
+2. Use one of the setups below in `wezterm.lua`, then reload WezTerm.
 
-   ```lua
-   local wezterm = require("wezterm")
-   local git_status = require("right-status")
+### WezTerm only
 
-   wezterm.on("update-right-status", function(window, pane)
-     if window:is_focused() then
-       git_status.refresh(pane)
-     end
-     window:set_right_status(wezterm.format(git_status.segments(window, pane)))
-   end)
-   ```
+Use this when each WezTerm pane directly runs your shell:
 
-3. Reload WezTerm.
+```lua
+local git_status = require("right-status")
 
-## Notes
+git_status.setup({
+  binary_path = os.getenv("HOME") .. "/.local/bin/wezterm-git-status-bridge",
+})
+```
 
-For a manual one-off update:
+This updates in the background from WezTerm events. The clock is shown by default because `show_time` defaults to `true`.
+
+### Herdr integration
+
+Use this when the visible Git repository is the focused pane inside Herdr:
+
+1. Install the Herdr plugin.
+
+```sh
+herdr plugin install riii111/wezterm-git-status-bridge/contrib/herdr-plugin --ref v0.2.0 --yes
+```
+
+2. Set this in `wezterm.lua`:
+
+```lua
+local git_status = require("right-status")
+
+git_status.setup({
+  auto_update = false,
+  binary_path = os.getenv("HOME") .. "/.local/bin/wezterm-git-status-bridge",
+})
+```
+
+The Herdr plugin updates on pane focus and workspace focus. It does not replace shell hooks for every branch switch or directory change inside a pane.
+
+### Migrating from a shell hook
+
+If your old setup called `wezterm-git-status-bridge update` from `chpwd` or `precmd`, keep that hook unless WezTerm-only updates cover your workflow. The command is:
 
 ```sh
 wezterm-git-status-bridge update --pane-id manual --cwd "$PWD"
 ```
 
-For Nix:
+## Notes
+
+If you already manage `update-right-status`, refresh the cache before composing the segments:
+
+```lua
+local wezterm = require("wezterm")
+local git_status = require("right-status")
+
+wezterm.on("update-right-status", function(window, pane)
+  if window:is_focused() then
+    git_status.refresh(pane)
+  end
+  window:set_right_status(wezterm.format(git_status.segments(window, pane)))
+end)
+```
+
+For a Nix one-off update:
 
 ```sh
 nix run github:riii111/wezterm-git-status-bridge -- update --pane-id manual --cwd "$PWD"
 ```
 
-Lua options:
+## Troubleshooting
 
-```lua
-git_status.setup({
-  auto_update = true,
-  max_age_seconds = 300,
-  show_time = true,
-  time_format = "%a %b %e %H:%M",
-})
-```
-
-Herdr users can install the included `contrib/herdr-plugin` plugin and disable WezTerm-side updates:
-
-```lua
-git_status.setup({
-  auto_update = false,
-})
-```
+- If Git status is shown but does not update, run `wezterm-git-status-bridge update --pane-id manual --cwd "$PWD"` and reload WezTerm. If that works, the missing piece is the update trigger.
+- If you set `auto_update = false`, something else must write the cache. Use the Herdr plugin, a shell hook, or both.
+- Herdr plugin events do not cover every shell-level `cd` or `git switch`. Keep `chpwd` / `precmd` hooks when migrating from that setup.
 
 Common options:
 
