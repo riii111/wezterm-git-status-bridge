@@ -66,6 +66,9 @@ plugin_cache_home="$tmp/cache-plugin"
 plugin_event_cache_home="$tmp/cache-plugin-event"
 plugin_env_fallback_cache_home="$tmp/cache-plugin-env-fallback"
 plugin_no_focus_cache_home="$tmp/cache-plugin-no-focus"
+setup_hook_cache_home="$tmp/cache-setup-hook"
+setup_wezterm_dir="$tmp/setup-wezterm"
+setup_zshrc="$tmp/setup-zshrc"
 lua_scratch="$tmp/lua"
 fake_herdr="$tmp/herdr"
 missing_bin_stderr="$tmp/missing-bin.stderr"
@@ -141,6 +144,45 @@ test "$tag" = "herdrgit1"
 test "$cached_pane_id" = "window/7:pane/8"
 test "$cached_cwd" = "$clean_repo"
 test "$present" = "1"
+
+cat > "$fake_herdr" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "plugin" ] && [ "\$2" = "link" ]; then
+	exit 0
+fi
+if [ "\$1" = "pane" ] && [ "\$2" = "list" ]; then
+	printf '%s\n' '{"result":{"panes":[{"pane_id":"window/9:pane/3","focused":true,"foreground_cwd":"$clean_repo"}]}}'
+	exit 0
+fi
+exit 2
+EOF
+chmod +x "$fake_herdr"
+
+"$bin" setup --herdr --herdr-bin "$fake_herdr" --wezterm-config-dir "$setup_wezterm_dir" --zshrc "$setup_zshrc"
+test -f "$setup_wezterm_dir/right-status.lua"
+test -f "$setup_wezterm_dir/wezterm.lua"
+grep -q -- '--cwd "$PWD"' "$setup_zshrc"
+if grep -q -- 'pane list' "$setup_zshrc"; then
+	exit 1
+fi
+(
+	cd "$dirty_repo"
+	env XDG_CACHE_HOME="$setup_hook_cache_home" WEZTERM_PANE="window/5:pane/6" zsh -fc ". '$setup_zshrc'; _wezterm_git_status_bridge_update"
+)
+
+setup_hook_cache="$setup_hook_cache_home/wezterm"
+count=0
+while [ ! -f "$setup_hook_cache/herdr-git-info" ] && [ "$count" -lt 50 ]; do
+	count=$((count + 1))
+	sleep 0.1
+done
+test -f "$setup_hook_cache/herdr-git-info"
+IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$setup_hook_cache/herdr-git-info"
+test "$tag" = "herdrgit1"
+test "$cached_pane_id" = "window/5:pane/6"
+test "$cached_cwd" = "$dirty_repo"
+test "$present" = "1"
+test "$repo" = "dirty-repo"
 
 cat > "$fake_herdr" <<'EOF'
 #!/usr/bin/env sh
