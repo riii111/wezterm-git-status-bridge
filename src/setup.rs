@@ -65,7 +65,7 @@ pub fn run(args: &SetupArgs) -> Result<(), SetupError> {
 
     if shell_hook {
         let zshrc = args.zshrc.clone().unwrap_or_else(|| home.join(".zshrc"));
-        upsert_zsh_hook(&zshrc, &binary_path, args.herdr_bin.as_deref())?;
+        upsert_zsh_hook(&zshrc, &binary_path)?;
     }
 
     upsert_wezterm_config(&wezterm_file, args.herdr, &binary_path)?;
@@ -241,12 +241,8 @@ fn link_herdr_plugin(herdr_bin: &Path, path: &Path) -> Result<(), SetupError> {
     }
 }
 
-fn upsert_zsh_hook(
-    path: &Path,
-    binary_path: &Path,
-    herdr_bin: Option<&Path>,
-) -> Result<(), SetupError> {
-    let block = zsh_hook_block(binary_path, herdr_bin);
+fn upsert_zsh_hook(path: &Path, binary_path: &Path) -> Result<(), SetupError> {
+    let block = zsh_hook_block(binary_path);
     let next = if let Some(current) = read_optional(path)? {
         replace_marked_block(&current, SHELL_BEGIN, SHELL_END, &block)
             .unwrap_or_else(|| append_block(&current, &block))
@@ -258,15 +254,10 @@ fn upsert_zsh_hook(
     write_file(path, &next)
 }
 
-fn zsh_hook_block(binary_path: &Path, herdr_bin: Option<&Path>) -> String {
+fn zsh_hook_block(binary_path: &Path) -> String {
     let binary = shell_single_quote(&binary_path.to_string_lossy());
-    let herdr = shell_single_quote(
-        &herdr_bin
-            .unwrap_or_else(|| Path::new("herdr"))
-            .to_string_lossy(),
-    );
     format!(
-        "{SHELL_BEGIN}\n_wezterm_git_status_bridge_update() {{\n  local event_json\n  local herdr_bin={herdr}\n  if [[ \"$herdr_bin\" = */* || \"$herdr_bin\" = .*/* ]]; then\n    [[ -x \"$herdr_bin\" ]] || herdr_bin=\n  elif ! command -v \"$herdr_bin\" >/dev/null 2>&1; then\n    herdr_bin=\n  fi\n  if [[ -n \"$herdr_bin\" ]]; then\n    event_json=$(\"$herdr_bin\" pane list 2>/dev/null) || event_json=\n    if [[ -n \"$event_json\" ]]; then\n      {binary} update --event-json \"$event_json\" >/dev/null 2>&1 &!\n      return\n    fi\n  fi\n  {binary} update --pane-id \"${{WEZTERM_PANE:-shell}}\" --cwd \"$PWD\" >/dev/null 2>&1 &!\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _wezterm_git_status_bridge_update\nadd-zsh-hook precmd _wezterm_git_status_bridge_update\n{SHELL_END}"
+        "{SHELL_BEGIN}\n_wezterm_git_status_bridge_update() {{\n  {binary} update --pane-id \"${{WEZTERM_PANE:-shell}}\" --cwd \"$PWD\" >/dev/null 2>&1 &!\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _wezterm_git_status_bridge_update\nadd-zsh-hook precmd _wezterm_git_status_bridge_update\n{SHELL_END}"
     )
 }
 
@@ -347,11 +338,9 @@ mod tests {
     fn setup_shell_hook_updates_zshrc() {
         let temp = TempDir::new().expect("create temp dir");
         let zshrc = temp.path().join(".zshrc");
-        let herdr = temp.path().join("custom-herdr");
 
         super::run(&SetupArgs {
             wezterm_config_dir: Some(temp.path().join("wezterm")),
-            herdr_bin: Some(herdr.clone()),
             shell_hook: true,
             zshrc: Some(zshrc.clone()),
             ..SetupArgs::default()
@@ -361,7 +350,9 @@ mod tests {
         let content = std::fs::read_to_string(zshrc).expect("read zshrc");
         assert!(content.contains("add-zsh-hook chpwd"));
         assert!(content.contains("add-zsh-hook precmd"));
-        assert!(content.contains(&format!("herdr_bin='{}'", herdr.display())));
+        assert!(content.contains("--cwd \"$PWD\""));
+        assert!(!content.contains("pane list"));
+        assert!(!content.contains("--event-json"));
     }
 
     #[test]
