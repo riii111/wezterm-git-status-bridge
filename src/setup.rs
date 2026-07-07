@@ -218,15 +218,13 @@ fn preserved_setup_options(block: &str) -> Option<Vec<String>> {
     let end = setup_table_end(&lines, start)?;
 
     let mut preserved = Vec::new();
-    let mut table_depth = 1;
-    let mut function_depth = 0;
+    let mut nesting = LuaNesting::setup_table();
     for line in &lines[start + 1..end] {
-        let top_level = table_depth == 1 && function_depth == 0;
-        if top_level && is_managed_setup_option(line) {
+        if nesting.is_setup_table_top_level() && is_managed_setup_option(line) {
             continue;
         }
         preserved.push((*line).to_owned());
-        update_lua_nesting(line, &mut table_depth, &mut function_depth);
+        nesting.update(line);
     }
 
     trim_blank_edges(&mut preserved);
@@ -234,11 +232,10 @@ fn preserved_setup_options(block: &str) -> Option<Vec<String>> {
 }
 
 fn setup_table_end(lines: &[&str], setup_start: usize) -> Option<usize> {
-    let mut table_depth = 1;
-    let mut function_depth = 0;
+    let mut nesting = LuaNesting::setup_table();
     for (index, line) in lines.iter().enumerate().skip(setup_start + 1) {
-        update_lua_nesting(line, &mut table_depth, &mut function_depth);
-        if table_depth == 0 && function_depth == 0 {
+        nesting.update(line);
+        if nesting.is_setup_table_closed() {
             return Some(index);
         }
     }
@@ -274,15 +271,124 @@ fn top_level_option_key(line: &str) -> Option<&str> {
         .then_some(&trimmed[..end])
 }
 
-fn update_lua_nesting(line: &str, table_depth: &mut usize, function_depth: &mut usize) {
-    let code = line.split("--").next().unwrap_or("");
-    *table_depth = (*table_depth)
-        .saturating_add(code.chars().filter(|character| *character == '{').count())
-        .saturating_sub(code.chars().filter(|character| *character == '}').count());
+#[derive(Default)]
+struct LuaNesting {
+    table_depth: usize,
+    function_depth: usize,
+    long_bracket_equals: Option<usize>,
+}
 
-    *function_depth = (*function_depth)
-        .saturating_add(count_lua_word(code, "function"))
-        .saturating_sub(count_lua_word(code, "end"));
+impl LuaNesting {
+    fn setup_table() -> Self {
+        Self {
+            table_depth: 1,
+            ..Self::default()
+        }
+    }
+
+    fn is_setup_table_top_level(&self) -> bool {
+        self.table_depth == 1 && self.function_depth == 0 && self.long_bracket_equals.is_none()
+    }
+
+    fn is_setup_table_closed(&self) -> bool {
+        self.table_depth == 0 && self.function_depth == 0 && self.long_bracket_equals.is_none()
+    }
+
+    fn update(&mut self, line: &str) {
+        let code = lua_code_for_nesting(line, &mut self.long_bracket_equals);
+        self.table_depth = self
+            .table_depth
+            .saturating_add(code.chars().filter(|character| *character == '{').count())
+            .saturating_sub(code.chars().filter(|character| *character == '}').count());
+
+        self.function_depth = self
+            .function_depth
+            .saturating_add(count_lua_word(&code, "function"))
+            .saturating_sub(count_lua_word(&code, "end"));
+    }
+}
+
+fn lua_code_for_nesting(line: &str, long_bracket_equals: &mut Option<usize>) -> String {
+    let bytes = line.as_bytes();
+    let mut code = String::with_capacity(line.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(equals) = *long_bracket_equals {
+            if let Some(close_end) = long_bracket_close_end(bytes, index, equals) {
+                *long_bracket_equals = None;
+                index = close_end;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+
+        if bytes[index] == b'-' && bytes.get(index + 1) == Some(&b'-') {
+            if let Some((equals, open_end)) = long_bracket_open_end(bytes, index + 2) {
+                *long_bracket_equals = Some(equals);
+                index = open_end;
+                continue;
+            }
+            break;
+        }
+
+        if bytes[index] == b'\'' || bytes[index] == b'"' {
+            index = short_string_end(bytes, index + 1, bytes[index]);
+            code.push(' ');
+            continue;
+        }
+
+        if let Some((equals, open_end)) = long_bracket_open_end(bytes, index) {
+            *long_bracket_equals = Some(equals);
+            index = open_end;
+            code.push(' ');
+            continue;
+        }
+
+        let character = line[index..]
+            .chars()
+            .next()
+            .expect("index is within string bounds");
+        code.push(character);
+        index += character.len_utf8();
+    }
+    code
+}
+
+fn long_bracket_open_end(bytes: &[u8], index: usize) -> Option<(usize, usize)> {
+    if bytes.get(index) != Some(&b'[') {
+        return None;
+    }
+    let mut cursor = index + 1;
+    while bytes.get(cursor) == Some(&b'=') {
+        cursor += 1;
+    }
+    (bytes.get(cursor) == Some(&b'[')).then_some((cursor - index - 1, cursor + 1))
+}
+
+fn long_bracket_close_end(bytes: &[u8], index: usize, equals: usize) -> Option<usize> {
+    if bytes.get(index) != Some(&b']') {
+        return None;
+    }
+    let mut cursor = index + 1;
+    for _ in 0..equals {
+        if bytes.get(cursor) != Some(&b'=') {
+            return None;
+        }
+        cursor += 1;
+    }
+    (bytes.get(cursor) == Some(&b']')).then_some(cursor + 1)
+}
+
+fn short_string_end(bytes: &[u8], mut index: usize, quote: u8) -> usize {
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index = index.saturating_add(2),
+            value if value == quote => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
 }
 
 fn count_lua_word(value: &str, word: &str) -> usize {
@@ -517,6 +623,9 @@ local git_status = require("right-status")
 git_status.setup({
   auto_update = true,
   binary_path = "/old/bin/wezterm-git-status-bridge",
+  separator = "}",
+  time_format = "function %H end",
+  -- }) function end
   on_reload = function(window, pane)
     window:set_config_overrides({
       colors = {
@@ -547,6 +656,8 @@ return config
 
         let config = std::fs::read_to_string(config_file).expect("read config");
         assert!(config.contains("auto_update = false"));
+        assert!(config.contains("separator = \"}\""));
+        assert!(config.contains("time_format = \"function %H end\""));
         assert!(config.contains("window:set_config_overrides({"));
         assert!(config.contains("tab_bar = { background = \"#1f2335\""));
         assert!(config.contains("mode_styles = {"));
