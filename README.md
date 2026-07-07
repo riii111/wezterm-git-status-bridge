@@ -44,6 +44,8 @@ wezterm-git-status-bridge setup --herdr
 
 `setup` writes the Lua module and updates `wezterm.lua`. With `--herdr`, it also links the Herdr plugin and installs a zsh `chpwd` / `precmd` hook so branch switches and directory changes update the cache.
 
+Rerunning `setup` refreshes the managed `binary_path` and Herdr defaults while preserving extra `git_status.setup({...})` options inside the setup block.
+
 ## Notes
 
 The clock is shown by default because `show_time` defaults to `true`.

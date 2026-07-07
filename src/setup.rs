@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -125,8 +126,16 @@ fn write_file(path: &Path, value: &str) -> Result<(), SetupError> {
 }
 
 fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result<(), SetupError> {
-    let block = wezterm_block(herdr, binary_path);
-    let next = match read_optional(path)? {
+    let current = read_optional(path)?;
+    let block = current
+        .as_deref()
+        .and_then(existing_marked_lua_block)
+        .and_then(preserved_setup_options)
+        .map_or_else(
+            || wezterm_block(herdr, binary_path),
+            |options| wezterm_block_with_options(herdr, binary_path, &options),
+        );
+    let next = match current {
         Some(current) => upsert_lua_block(&current, &block),
         None => new_wezterm_config(&block),
     };
@@ -134,16 +143,29 @@ fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result
 }
 
 fn wezterm_block(herdr: bool, binary_path: &Path) -> String {
+    wezterm_block_with_options(herdr, binary_path, &[])
+}
+
+fn wezterm_block_with_options(
+    herdr: bool,
+    binary_path: &Path,
+    preserved_options: &[String],
+) -> String {
     let escaped_binary = lua_string(binary_path);
+    let mut block = String::new();
+    block.push_str(SETUP_BEGIN);
+    block.push_str("\nlocal git_status = require(\"right-status\")\ngit_status.setup({\n");
     if herdr {
-        format!(
-            "{SETUP_BEGIN}\nlocal git_status = require(\"right-status\")\ngit_status.setup({{\n  auto_update = false,\n  binary_path = {escaped_binary},\n}})\n{SETUP_END}"
-        )
-    } else {
-        format!(
-            "{SETUP_BEGIN}\nlocal git_status = require(\"right-status\")\ngit_status.setup({{\n  binary_path = {escaped_binary},\n}})\n{SETUP_END}"
-        )
+        block.push_str("  auto_update = false,\n");
     }
+    let _ = writeln!(block, "  binary_path = {escaped_binary},");
+    for option in preserved_options {
+        block.push_str(option);
+        block.push('\n');
+    }
+    block.push_str("})\n");
+    block.push_str(SETUP_END);
+    block
 }
 
 fn lua_string(path: &Path) -> String {
@@ -175,6 +197,100 @@ fn upsert_lua_block(current: &str, block: &str) -> String {
     let mut next = lines.join("\n");
     next.push('\n');
     next
+}
+
+fn existing_marked_lua_block(current: &str) -> Option<&str> {
+    marked_block(current, SETUP_BEGIN, SETUP_END)
+}
+
+fn marked_block<'a>(current: &'a str, begin: &str, end: &str) -> Option<&'a str> {
+    let start = current.find(begin)?;
+    let end_start = current[start..].find(end)? + start;
+    let end_index = end_start + end.len();
+    Some(&current[start..end_index])
+}
+
+fn preserved_setup_options(block: &str) -> Option<Vec<String>> {
+    let lines = block.lines().collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|line| line.contains("git_status.setup({"))?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| line.trim() == "})")?
+        + start
+        + 1;
+
+    let mut preserved = Vec::new();
+    let mut table_depth = 0;
+    let mut function_depth = 0;
+    for line in &lines[start + 1..end] {
+        let top_level = table_depth == 0 && function_depth == 0;
+        if top_level && is_managed_setup_option(line) {
+            continue;
+        }
+        preserved.push((*line).to_owned());
+        update_lua_nesting(line, &mut table_depth, &mut function_depth);
+    }
+
+    trim_blank_edges(&mut preserved);
+    Some(preserved)
+}
+
+fn is_managed_setup_option(line: &str) -> bool {
+    matches!(
+        top_level_option_key(line),
+        Some("auto_update" | "binary_path")
+    )
+}
+
+fn top_level_option_key(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let mut end = 0;
+    for (index, character) in trimmed.char_indices() {
+        if index == 0 {
+            if !(character == '_' || character.is_ascii_alphabetic()) {
+                return None;
+            }
+        } else if !(character == '_' || character.is_ascii_alphanumeric()) {
+            break;
+        }
+        end = index + character.len_utf8();
+    }
+    if end == 0 {
+        return None;
+    }
+    trimmed[end..]
+        .trim_start()
+        .starts_with('=')
+        .then_some(&trimmed[..end])
+}
+
+fn update_lua_nesting(line: &str, table_depth: &mut usize, function_depth: &mut usize) {
+    let code = line.split("--").next().unwrap_or("");
+    *table_depth = (*table_depth)
+        .saturating_add(code.chars().filter(|character| *character == '{').count())
+        .saturating_sub(code.chars().filter(|character| *character == '}').count());
+
+    *function_depth = (*function_depth)
+        .saturating_add(count_lua_word(code, "function"))
+        .saturating_sub(count_lua_word(code, "end"));
+}
+
+fn count_lua_word(value: &str, word: &str) -> usize {
+    value
+        .split(|character: char| !(character == '_' || character.is_ascii_alphanumeric()))
+        .filter(|part| *part == word)
+        .count()
+}
+
+fn trim_blank_edges(lines: &mut Vec<String>) {
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
 }
 
 fn replace_marked_block(current: &str, begin: &str, end: &str, block: &str) -> Option<String> {
@@ -374,6 +490,55 @@ mod tests {
                 .join(".config/wezterm/right-status.lua")
                 .is_file()
         );
+    }
+
+    #[test]
+    fn setup_preserves_custom_lua_options() {
+        let temp = TempDir::new().expect("create temp dir");
+        let config_dir = temp.path().join("wezterm");
+        let config_file = config_dir.join("wezterm.lua");
+        let herdr = temp.path().join("herdr");
+        write_script(&herdr, "exit 0\n");
+
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::write(
+            &config_file,
+            r##"local config = {}
+-- wezterm-git-status-bridge setup begin
+local git_status = require("right-status")
+git_status.setup({
+  auto_update = true,
+  binary_path = "/old/bin/wezterm-git-status-bridge",
+  mode_styles = {
+    resize = { label = "RESIZE", bg = "#7aa2f7", fg = "#1f2335" },
+  },
+  on_reload = function(window, pane)
+    window:set_right_status("mode")
+  end,
+})
+-- wezterm-git-status-bridge setup end
+return config
+"##,
+        )
+        .expect("write config");
+
+        super::run(&SetupArgs {
+            wezterm_config_dir: Some(config_dir),
+            wezterm_config_file: Some(config_file.clone()),
+            herdr: true,
+            herdr_bin: Some(herdr),
+            no_shell_hook: true,
+            ..SetupArgs::default()
+        })
+        .expect("run setup");
+
+        let config = std::fs::read_to_string(config_file).expect("read config");
+        assert!(config.contains("auto_update = false"));
+        assert!(config.contains("mode_styles = {"));
+        assert!(config.contains("resize = { label = \"RESIZE\""));
+        assert!(config.contains("on_reload = function(window, pane)"));
+        assert!(config.contains("window:set_right_status(\"mode\")"));
+        assert!(!config.contains("/old/bin/wezterm-git-status-bridge"));
     }
 
     #[test]
