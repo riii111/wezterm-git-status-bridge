@@ -215,17 +215,13 @@ fn preserved_setup_options(block: &str) -> Option<Vec<String>> {
     let start = lines
         .iter()
         .position(|line| line.contains("git_status.setup({"))?;
-    let end = lines[start + 1..]
-        .iter()
-        .position(|line| line.trim() == "})")?
-        + start
-        + 1;
+    let end = setup_table_end(&lines, start)?;
 
     let mut preserved = Vec::new();
-    let mut table_depth = 0;
+    let mut table_depth = 1;
     let mut function_depth = 0;
     for line in &lines[start + 1..end] {
-        let top_level = table_depth == 0 && function_depth == 0;
+        let top_level = table_depth == 1 && function_depth == 0;
         if top_level && is_managed_setup_option(line) {
             continue;
         }
@@ -235,6 +231,18 @@ fn preserved_setup_options(block: &str) -> Option<Vec<String>> {
 
     trim_blank_edges(&mut preserved);
     Some(preserved)
+}
+
+fn setup_table_end(lines: &[&str], setup_start: usize) -> Option<usize> {
+    let mut table_depth = 1;
+    let mut function_depth = 0;
+    for (index, line) in lines.iter().enumerate().skip(setup_start + 1) {
+        update_lua_nesting(line, &mut table_depth, &mut function_depth);
+        if table_depth == 0 && function_depth == 0 {
+            return Some(index);
+        }
+    }
+    None
 }
 
 fn is_managed_setup_option(line: &str) -> bool {
@@ -509,12 +517,17 @@ local git_status = require("right-status")
 git_status.setup({
   auto_update = true,
   binary_path = "/old/bin/wezterm-git-status-bridge",
+  on_reload = function(window, pane)
+    window:set_config_overrides({
+      colors = {
+        tab_bar = { background = "#1f2335" },
+      },
+    })
+    window:set_right_status("mode")
+  end,
   mode_styles = {
     resize = { label = "RESIZE", bg = "#7aa2f7", fg = "#1f2335" },
   },
-  on_reload = function(window, pane)
-    window:set_right_status("mode")
-  end,
 })
 -- wezterm-git-status-bridge setup end
 return config
@@ -534,6 +547,8 @@ return config
 
         let config = std::fs::read_to_string(config_file).expect("read config");
         assert!(config.contains("auto_update = false"));
+        assert!(config.contains("window:set_config_overrides({"));
+        assert!(config.contains("tab_bar = { background = \"#1f2335\""));
         assert!(config.contains("mode_styles = {"));
         assert!(config.contains("resize = { label = \"RESIZE\""));
         assert!(config.contains("on_reload = function(window, pane)"));

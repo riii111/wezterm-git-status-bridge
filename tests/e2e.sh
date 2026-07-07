@@ -166,12 +166,17 @@ local git_status = require("right-status")
 git_status.setup({
   auto_update = true,
   binary_path = "/old/bin/wezterm-git-status-bridge",
+  on_reload = function(window, pane)
+    window:set_config_overrides({
+      colors = {
+        tab_bar = { background = "#1f2335" },
+      },
+    })
+    window:set_right_status("mode")
+  end,
   mode_styles = {
     resize = { label = "RESIZE", bg = "#7aa2f7", fg = "#1f2335" },
   },
-  on_reload = function(window, pane)
-    window:set_right_status("mode")
-  end,
 })
 -- wezterm-git-status-bridge setup end
 return config
@@ -180,6 +185,7 @@ EOF
 "$bin" setup --herdr --herdr-bin "$fake_herdr" --wezterm-config-dir "$setup_wezterm_dir" --zshrc "$setup_zshrc"
 test -f "$setup_wezterm_dir/right-status.lua"
 test -f "$setup_wezterm_dir/wezterm.lua"
+grep -q -- 'window:set_config_overrides({' "$setup_wezterm_dir/wezterm.lua"
 grep -q -- 'mode_styles = {' "$setup_wezterm_dir/wezterm.lua"
 grep -q -- 'on_reload = function(window, pane)' "$setup_wezterm_dir/wezterm.lua"
 grep -q -- 'auto_update = false' "$setup_wezterm_dir/wezterm.lua"
