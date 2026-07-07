@@ -37,7 +37,9 @@ Herdr is optional. WezTerm can update the cache by itself; the Herdr plugin is o
    local git_status = require("right-status")
 
    wezterm.on("update-right-status", function(window, pane)
-     git_status.refresh(pane)
+     if window:is_focused() then
+       git_status.refresh(pane)
+     end
      window:set_right_status(wezterm.format(git_status.segments(window, pane)))
    end)
    ```

@@ -51,6 +51,15 @@ local function write_file(path, contents)
 	file:close()
 end
 
+local function handler(name)
+	for _, candidate in ipairs(_G.wezterm_handlers or {}) do
+		if candidate.name == name then
+			return candidate.callback
+		end
+	end
+	error("missing handler: " .. name, 2)
+end
+
 local function cache_dir(name)
 	local path = base_dir .. "/" .. name
 	mkdir(path .. "/herdr-git-info-by-pane")
@@ -315,7 +324,7 @@ local function setup_refreshes_active_pane_in_background()
 		end,
 		show_time = false,
 	})
-	_G.wezterm_handlers[1].callback(window, pane)
+	handler("update-right-status")(window, pane)
 
 	local args = _G.wezterm_background_processes[1]
 	assert_equal(args[1], "/bin/bridge", "background binary")
@@ -358,7 +367,7 @@ local function setup_does_not_refresh_unfocused_window()
 		cache_dir = cache_dir("setup-unfocused"),
 		show_time = false,
 	})
-	_G.wezterm_handlers[1].callback(window, pane)
+	handler("update-right-status")(window, pane)
 
 	assert_equal(#_G.wezterm_background_processes, 0, "unfocused background refresh")
 	assert_equal(#_G.wezterm_timers, 0, "unfocused delayed render")
@@ -371,12 +380,13 @@ local function setup_throttles_background_refreshes()
 	_G.wezterm_timers = {}
 	right_status._setup_done = nil
 
+	local cwd = "/repo"
 	local pane = {
 		pane_id = function()
 			return 43
 		end,
 		get_current_working_dir = function()
-			return "/repo"
+			return cwd
 		end,
 	}
 	local window = {
@@ -391,11 +401,20 @@ local function setup_throttles_background_refreshes()
 		end,
 		show_time = false,
 	})
-	_G.wezterm_handlers[1].callback(window, pane)
+	handler("update-right-status")(window, pane)
 	now = 101
-	_G.wezterm_handlers[1].callback(window, pane)
+	handler("update-right-status")(window, pane)
 
 	assert_equal(#_G.wezterm_background_processes, 1, "throttled background refresh")
+
+	now = 102
+	handler("update-right-status")(window, pane)
+	assert_equal(#_G.wezterm_background_processes, 2, "refresh resumes after interval")
+
+	cwd = "/repo-next"
+	now = 103
+	handler("update-right-status")(window, pane)
+	assert_equal(#_G.wezterm_background_processes, 3, "cwd change refreshes within interval")
 end
 
 local function setup_can_disable_background_refreshes()
@@ -421,7 +440,7 @@ local function setup_can_disable_background_refreshes()
 		auto_update = false,
 		show_time = false,
 	})
-	_G.wezterm_handlers[1].callback(window, pane)
+	handler("update-right-status")(window, pane)
 
 	assert_equal(#_G.wezterm_background_processes, 0, "disabled background refresh")
 end
@@ -490,12 +509,91 @@ local function refresh_rejects_remote_cwd()
 			return { scheme = "file", host = "local-host", path = "/repo%20one" }
 		end,
 	}
+	local plain_percent_path_pane = {
+		pane_id = function()
+			return 53
+		end,
+		get_current_working_dir = function()
+			return "/repo%41"
+		end,
+	}
+	local local_fqdn_pane = {
+		pane_id = function()
+			return 49
+		end,
+		get_current_working_dir = function()
+			return { scheme = "file", host = "local-host.example.com", path = "/repo%20two" }
+		end,
+	}
+	local malformed_file_uri_pane = {
+		pane_id = function()
+			return 50
+		end,
+		get_current_working_dir = function()
+			return "file://remote-host"
+		end,
+	}
+	local local_short_from_fqdn_pane = {
+		pane_id = function()
+			return 51
+		end,
+		get_current_working_dir = function()
+			return { scheme = "file", host = "local-host", path = "/repo%20three" }
+		end,
+	}
+	local wezterm_module = package.loaded.wezterm
+	local original_hostname = wezterm_module.hostname
 
 	assert_equal(right_status.refresh(remote_file_pane), false, "remote file cwd")
 	assert_equal(right_status.refresh(non_file_pane), false, "non-file cwd")
+	assert_equal(right_status.refresh(malformed_file_uri_pane), false, "malformed file uri")
 	assert_equal(right_status.refresh(local_file_pane), true, "local file cwd")
-	assert_equal(#_G.wezterm_background_processes, 1, "local refresh count")
+	assert_equal(right_status.refresh(plain_percent_path_pane), true, "plain percent path")
+	assert_equal(right_status.refresh(local_fqdn_pane), true, "local fqdn cwd")
+	wezterm_module.hostname = function()
+		return "local-host.example.com"
+	end
+	assert_equal(right_status.refresh(local_short_from_fqdn_pane), true, "local short cwd from fqdn hostname")
+	wezterm_module.hostname = original_hostname
+	assert_equal(#_G.wezterm_background_processes, 4, "local refresh count")
 	assert_equal(_G.wezterm_background_processes[1][6], "/repo one", "local decoded cwd")
+	assert_equal(_G.wezterm_background_processes[2][6], "/repo%41", "plain percent cwd")
+	assert_equal(_G.wezterm_background_processes[3][6], "/repo two", "local fqdn decoded cwd")
+	assert_equal(_G.wezterm_background_processes[4][6], "/repo three", "local short decoded cwd")
+end
+
+local function render_event_uses_active_pane_fallback()
+	_G.wezterm_handlers = {}
+	_G.wezterm_background_processes = {}
+	_G.wezterm_timers = {}
+	right_status._setup_done = nil
+
+	local pane = {
+		pane_id = function()
+			return 52
+		end,
+		get_current_working_dir = function()
+			return "/repo"
+		end,
+	}
+	local window = {
+		active_pane = function()
+			return pane
+		end,
+		is_focused = function()
+			return true
+		end,
+		set_right_status = function() end,
+	}
+
+	right_status.setup({
+		cache_dir = cache_dir("render-event"),
+		show_time = false,
+	})
+	handler("render-right-status")(window, nil)
+
+	assert_equal(#_G.wezterm_background_processes, 1, "render event active pane refresh")
+	assert_equal(_G.wezterm_background_processes[1][4], "52", "render event pane id")
 end
 
 local function render_generated_cache(cache, now)
@@ -555,6 +653,7 @@ local function run_unit_assertions()
 	setup_can_disable_background_refreshes()
 	refresh_without_background_api_does_not_throttle()
 	refresh_rejects_remote_cwd()
+	render_event_uses_active_pane_fallback()
 end
 
 if arg[2] == "--e2e" then

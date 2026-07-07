@@ -100,7 +100,10 @@ local function is_local_host(host)
 	if not hostname or hostname == "" then
 		return false
 	end
-	return host == hostname or host == hostname:match("^[^.]+$")
+	local function short_host(name)
+		return name:match("^[^.]+")
+	end
+	return host == hostname or short_host(host) == short_host(hostname)
 end
 
 local function decode_uri_path(value)
@@ -111,6 +114,9 @@ local function decode_uri_path(value)
 		end
 		return decode_percent(path)
 	end
+	if value:match("^file://") then
+		return nil
+	end
 	return decode_percent(value)
 end
 
@@ -119,7 +125,10 @@ local function cwd_path(cwd)
 		return nil
 	end
 	if type(cwd) == "string" then
-		return decode_uri_path(cwd)
+		if cwd:match("^file://") then
+			return decode_uri_path(cwd)
+		end
+		return cwd
 	end
 	if cwd.scheme and cwd.scheme ~= "file" then
 		return nil
