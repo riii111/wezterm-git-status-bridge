@@ -8,6 +8,7 @@ use crate::cache::{self, CacheError};
 use crate::event::{self, EventError, PaneContext};
 use crate::git_status::{self, GitStatusError};
 use crate::payload::Payload;
+use crate::setup::{self, SetupError};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -21,7 +22,32 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Setup(SetupArgs),
     Update(UpdateArgs),
+}
+
+#[derive(Args, Clone, Debug, Default)]
+pub struct SetupArgs {
+    #[arg(long, value_name = "DIR")]
+    pub wezterm_config_dir: Option<PathBuf>,
+
+    #[arg(long, value_name = "FILE")]
+    pub wezterm_config_file: Option<PathBuf>,
+
+    #[arg(long)]
+    pub herdr: bool,
+
+    #[arg(long, value_name = "PATH")]
+    pub herdr_bin: Option<PathBuf>,
+
+    #[arg(long)]
+    pub shell_hook: bool,
+
+    #[arg(long)]
+    pub no_shell_hook: bool,
+
+    #[arg(long, value_name = "FILE")]
+    pub zshrc: Option<PathBuf>,
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -49,16 +75,18 @@ pub enum CliError {
     GitStatus(#[from] GitStatusError),
     #[error(transparent)]
     Cache(#[from] CacheError),
+    #[error(transparent)]
+    Setup(#[from] SetupError),
     #[error("system time is before UNIX epoch")]
     InvalidSystemTime,
 }
 
 pub fn run(cli: Cli) -> Result<(), CliError> {
-    let args = match cli.command {
-        Some(Command::Update(args)) => args,
-        None => cli.update,
-    };
-    update(args)
+    match cli.command {
+        Some(Command::Setup(args)) => setup::run(&args).map_err(Into::into),
+        Some(Command::Update(args)) => update(args),
+        None => update(cli.update),
+    }
 }
 
 fn update(args: UpdateArgs) -> Result<(), CliError> {
