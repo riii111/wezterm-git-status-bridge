@@ -178,8 +178,6 @@ local function pane_id(pane)
 	return tostring(id)
 end
 
-local read_cached_pane_info
-
 local function refresh(pane, options)
 	if not options.auto_update then
 		return false
@@ -196,16 +194,6 @@ local function refresh(pane, options)
 	local now = options.now()
 	local last = last_update_by_pane[id]
 	if last and last.cwd == cwd and now - last.at < options.update_interval_seconds then
-		return false
-	end
-
-	local cached = read_cached_pane_info(options, id)
-	local cache_written_by_foreign_writer = cached
-		and cached.cwd ~= ""
-		and cached.cwd ~= cwd
-		and last
-		and cached.cwd ~= last.cwd
-	if cache_written_by_foreign_writer then
 		return false
 	end
 
@@ -318,7 +306,7 @@ local function is_fresh(info, options)
 	return options.now() - info.at <= options.max_age_seconds
 end
 
-read_cached_pane_info = function(options, id)
+local function read_cached_pane_info(options, id)
 	if not id or id == "" then
 		return nil
 	end
@@ -343,52 +331,43 @@ end
 local function read_current_pane_info(options, pane)
 	local id = pane_id(pane)
 	if not id or id == "" then
-		return nil, false
+		return nil
 	end
 	local info = read_cached_pane_info(options, id)
 	if not info then
-		return nil, false
+		return nil
 	end
 
 	local cwd = pane_cwd(pane)
 	if cwd and cwd ~= "" and info.cwd ~= "" and info.cwd ~= cwd then
-		return nil, false
+		return nil
 	end
-
-	if info.present then
-		return info, true
-	end
-	return nil, true
+	return info
 end
 
 local function read_current_cwd_info(options, pane)
 	local cwd = pane_cwd(pane)
 	if not cwd or cwd == "" then
-		return nil, false
+		return nil
 	end
-	local info = read_cached_cwd_info(options, cwd)
-	if not info then
-		return nil, false
-	end
-
-	if info.present then
-		return info, true
-	end
-	return nil, true
+	return read_cached_cwd_info(options, cwd)
 end
 
 local function read_git_info(options, pane)
-	-- Prefer the active pane cache; fall back to cwd when pane-id namespaces diverge.
-	local current, has_current_pane_cache = read_current_pane_info(options, pane)
-	if has_current_pane_cache then
-		return current
+	-- Prefer the freshest matching cache; cwd join covers pane-id namespace divergence.
+	local pane_info = read_current_pane_info(options, pane)
+	local cwd_info = read_current_cwd_info(options, pane)
+
+	local chosen
+	if pane_info and cwd_info then
+		chosen = pane_info.at >= cwd_info.at and pane_info or cwd_info
+	else
+		chosen = pane_info or cwd_info
 	end
 
-	local by_cwd, has_cwd_cache = read_current_cwd_info(options, pane)
-	if has_cwd_cache then
-		return by_cwd
+	if chosen and chosen.present then
+		return chosen
 	end
-
 	return nil
 end
 

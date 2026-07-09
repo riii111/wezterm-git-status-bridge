@@ -206,7 +206,7 @@ local function ignores_invalid_payloads()
 	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "missing repo")
 end
 
-local function prefers_newer_per_pane_payload()
+local function prefers_newer_per_pane_cache_over_cwd_cache()
 	local cache = cache_dir("per-pane")
 	write_file(
 		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo"),
@@ -217,7 +217,22 @@ local function prefers_newer_per_pane_payload()
 	assert_equal(
 		segment_text(render(cache, 130, pane_stub("pane1", "/repo"))),
 		"  repo" .. default_separator .. "󰙅  feature",
-		"per-pane payload"
+		"newer per-pane cache"
+	)
+end
+
+local function prefers_newer_cwd_cache_over_stale_pane_cache()
+	local cache = cache_dir("newer-cwd")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo"),
+		"herdrgit1\t220\twE:p1\t/repo\t1\trepo\tfeature\t\n"
+	)
+	write_file(cache .. "/herdr-git-info-by-pane/0", "herdrgit1\t100\t0\t/repo\t1\trepo\tmain\t\n")
+
+	assert_equal(
+		segment_text(render(cache, 230, pane_stub(0, "/repo"))),
+		"  repo" .. default_separator .. " feature",
+		"newer cwd cache"
 	)
 end
 
@@ -240,26 +255,6 @@ local function uses_slash_sanitized_per_pane_path()
 		segment_text(render(cache, 130, pane_stub("w1/p1", "/repo"))),
 		"  repo" .. default_separator .. " feature",
 		"slash pane path"
-	)
-end
-
-local function prefers_current_pane_cache_over_cwd_cache()
-	local cache = cache_dir("current-pane")
-	write_file(
-		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-current"),
-		"herdrgit1\t200\t3\t/repo-current\t1\tcwd-repo\tmain\t\n"
-	)
-	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
-
-	assert_equal(
-		segment_text(render_with_pane(cache, pane_stub(55, "/repo-current"), {
-			now = function()
-				return 220
-			end,
-			show_time = false,
-		})),
-		"  current-repo" .. default_separator .. " feature",
-		"current pane cache"
 	)
 end
 
@@ -718,44 +713,14 @@ local function render_without_pane_prefers_window_active_pane_cache()
 	assert_equal(segment_text(captured), "  current-repo" .. default_separator .. " feature", "render active pane")
 end
 
-local function refresh_skips_foreign_mismatched_cached_cwd()
+local function refresh_rewrites_mismatched_cached_cwd()
 	_G.wezterm_background_processes = {}
 	local cache = cache_dir("refresh-cached-cwd-mismatch")
+	write_file(cache .. "/herdr-git-info-by-pane/57", "herdrgit1\t210\t57\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
 	local pane = {
 		pane_id = function()
 			return 57
-		end,
-		get_current_working_dir = function()
-			return "/repo-old"
-		end,
-	}
-	local now = 220
-	local options = {
-		cache_dir = cache,
-		now = function()
-			return now
-		end,
-	}
-
-	local launched = right_status.refresh(pane, options)
-	assert_equal(launched, true, "initial refresh")
-	write_file(cache .. "/herdr-git-info-by-pane/57", "herdrgit1\t221\t57\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
-
-	now = 222
-	launched = right_status.refresh(pane, options)
-
-	assert_equal(launched, false, "refresh foreign cached cwd mismatch")
-	assert_equal(#_G.wezterm_background_processes, 1, "refresh foreign cached cwd mismatch process count")
-end
-
-local function refresh_repairs_mismatched_cache_without_last_update()
-	_G.wezterm_background_processes = {}
-	local cache = cache_dir("refresh-repair-without-last")
-	write_file(cache .. "/herdr-git-info-by-pane/59", "herdrgit1\t210\t59\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
-
-	local pane = {
-		pane_id = function()
-			return 59
 		end,
 		get_current_working_dir = function()
 			return "/repo-old"
@@ -769,12 +734,12 @@ local function refresh_repairs_mismatched_cache_without_last_update()
 		end,
 	})
 
-	assert_equal(launched, true, "refresh repairs without last update")
-	assert_equal(#_G.wezterm_background_processes, 1, "refresh repairs without last update process count")
-	assert_equal(_G.wezterm_background_processes[1][6], "/repo-old", "refresh repairs without last update cwd")
+	assert_equal(launched, true, "refresh rewrites mismatched cached cwd")
+	assert_equal(#_G.wezterm_background_processes, 1, "refresh rewrites mismatched cached cwd process count")
+	assert_equal(_G.wezterm_background_processes[1][6], "/repo-old", "refresh rewrites mismatched cached cwd cwd")
 end
 
-local function refresh_allows_cwd_change_from_own_cached_cwd()
+local function refresh_allows_cwd_change_from_cached_cwd()
 	_G.wezterm_background_processes = {}
 	local cache = cache_dir("refresh-own-cached-cwd-change")
 	local cwd = "/repo-old"
@@ -802,9 +767,9 @@ local function refresh_allows_cwd_change_from_own_cached_cwd()
 	now = 221
 	launched = right_status.refresh(pane, options)
 
-	assert_equal(launched, true, "refresh own cached cwd change")
-	assert_equal(#_G.wezterm_background_processes, 2, "refresh own cached cwd change process count")
-	assert_equal(_G.wezterm_background_processes[2][6], "/repo-next", "refresh own cached cwd change cwd")
+	assert_equal(launched, true, "refresh cached cwd change")
+	assert_equal(#_G.wezterm_background_processes, 2, "refresh cached cwd change process count")
+	assert_equal(_G.wezterm_background_processes[2][6], "/repo-next", "refresh cached cwd change cwd")
 end
 
 local function refresh_without_background_api_does_not_throttle()
@@ -1008,10 +973,10 @@ local function run_unit_assertions()
 	hides_stale_payload()
 	can_disable_stale_payload_ttl()
 	ignores_invalid_payloads()
-	prefers_newer_per_pane_payload()
+	prefers_newer_per_pane_cache_over_cwd_cache()
+	prefers_newer_cwd_cache_over_stale_pane_cache()
 	uses_sanitized_per_pane_path()
 	uses_slash_sanitized_per_pane_path()
-	prefers_current_pane_cache_over_cwd_cache()
 	current_pane_cwd_mismatch_falls_back_to_cwd_cache()
 	current_pane_absent_status_hides_cwd_cache()
 	mismatched_absent_pane_cache_falls_back_to_cwd_cache()
@@ -1033,9 +998,8 @@ local function run_unit_assertions()
 	setup_can_disable_background_refreshes()
 	update_event_without_pane_prefers_active_pane_cache()
 	render_without_pane_prefers_window_active_pane_cache()
-	refresh_skips_foreign_mismatched_cached_cwd()
-	refresh_repairs_mismatched_cache_without_last_update()
-	refresh_allows_cwd_change_from_own_cached_cwd()
+	refresh_rewrites_mismatched_cached_cwd()
+	refresh_allows_cwd_change_from_cached_cwd()
 	refresh_without_background_api_does_not_throttle()
 	refresh_rejects_remote_cwd()
 	render_event_uses_active_pane_fallback()
