@@ -176,6 +176,31 @@ local function pane_id(pane)
 	return tostring(id)
 end
 
+local function pane_foreground_process_name(pane)
+	if not pane or not pane.get_foreground_process_name then
+		return nil
+	end
+	local ok, name = pcall(function()
+		return pane:get_foreground_process_name()
+	end)
+	if not ok or not name or name == "" then
+		return nil
+	end
+	return tostring(name)
+end
+
+local function basename(path)
+	return path:gsub("\\", "/"):match("([^/]+)$") or path
+end
+
+local function pane_is_herdr_host(pane)
+	local process = pane_foreground_process_name(pane)
+	if not process then
+		return false
+	end
+	return basename(process) == "herdr"
+end
+
 local function refresh(pane, options)
 	if not options.auto_update then
 		return false
@@ -294,6 +319,14 @@ local function cwd_cache_path(options, cwd)
 	return cache_dir(options) .. "/herdr-git-info-by-cwd/" .. cwd_cache_key(cwd)
 end
 
+local function focused_cache_path(options)
+	return cache_dir(options) .. "/herdr-git-info-focused"
+end
+
+local function read_focused_info(options)
+	return parse_payload(read_line(focused_cache_path(options)))
+end
+
 local function read_cached_pane_info(options, id)
 	if not id or id == "" then
 		return nil
@@ -342,6 +375,22 @@ local function read_current_cwd_info(options, pane)
 end
 
 local function read_git_info(options, pane)
+	if pane_is_herdr_host(pane) then
+		local focused_info = read_focused_info(options)
+		if not focused_info then
+			return nil
+		end
+		local cwd_info = read_cached_cwd_info(options, focused_info.cwd)
+		local chosen = focused_info
+		if cwd_info and cwd_info.at >= focused_info.at then
+			chosen = cwd_info
+		end
+		if chosen.present then
+			return chosen
+		end
+		return nil
+	end
+
 	-- Prefer the freshest matching cache; cwd join covers pane-id namespace divergence.
 	local pane_info = read_current_pane_info(options, pane)
 	local cwd_info = read_current_cwd_info(options, pane)

@@ -40,6 +40,16 @@ pub fn write_payload(cache_dir: &Path, payload: &Payload) -> Result<(), CacheErr
     Ok(())
 }
 
+/// Writes the default cache set plus the Herdr-focused cache read by the WezTerm Lua module.
+pub fn write_payload_with_focused(cache_dir: &Path, payload: &Payload) -> Result<(), CacheError> {
+    write_payload(cache_dir, payload)?;
+    atomic_write(
+        &cache_dir.join("herdr-git-info-focused"),
+        &payload.encode_line(),
+    )?;
+    Ok(())
+}
+
 fn atomic_write(path: &Path, contents: &str) -> Result<(), std::io::Error> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp.{}", std::process::id()));
@@ -80,7 +90,7 @@ mod tests {
 
     use crate::payload::Payload;
 
-    use super::{cwd_cache_key, write_payload};
+    use super::{cwd_cache_key, write_payload, write_payload_with_focused};
 
     #[test]
     fn writes_global_per_pane_and_per_cwd_cache_files() {
@@ -110,6 +120,30 @@ mod tests {
                     .join(cwd_cache_key(Path::new("/repo")))
             )
             .expect("read cwd cache"),
+            payload.encode_line()
+        );
+    }
+
+    #[test]
+    fn focused_payload_keeps_separate_focused_cache() {
+        let temp = TempDir::new().expect("create temp dir");
+        let payload = Payload {
+            at: 123,
+            pane_id: "w1:p1".to_owned(),
+            cwd: "/repo".into(),
+            repository: None,
+        };
+
+        write_payload_with_focused(temp.path(), &payload).expect("write payload");
+
+        assert_eq!(
+            fs::read_to_string(temp.path().join("herdr-git-info-focused"))
+                .expect("read focused cache"),
+            payload.encode_line()
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("herdr-git-info-by-pane/w1:p1"))
+                .expect("read pane cache"),
             payload.encode_line()
         );
     }
