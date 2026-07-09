@@ -123,6 +123,7 @@ env -u HERDR_PLUGIN_EVENT_JSON \
 
 plugin_cache="$plugin_cache_home/wezterm"
 test -f "$plugin_cache/herdr-git-info-by-pane/window_9:pane_3"
+test -f "$plugin_cache/herdr-git-info-focused"
 IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$plugin_cache/herdr-git-info"
 test "$tag" = "herdrgit1"
 test "$cached_pane_id" = "window/9:pane/3"
@@ -139,6 +140,7 @@ HERDR_PLUGIN_EVENT_JSON='{"event":"pane.focused"}' \
 
 plugin_event_cache="$plugin_event_cache_home/wezterm"
 test -f "$plugin_event_cache/herdr-git-info-by-pane/window_9:pane_3"
+test -f "$plugin_event_cache/herdr-git-info-focused"
 IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$plugin_event_cache/herdr-git-info"
 test "$tag" = "herdrgit1"
 test "$cached_pane_id" = "window/9:pane/3"
@@ -159,6 +161,7 @@ HERDR_PLUGIN_EVENT_JSON="{\"pane\":{\"pane_id\":\"window/7:pane/8\",\"cwd\":\"$c
 
 plugin_env_fallback_cache="$plugin_env_fallback_cache_home/wezterm"
 test -f "$plugin_env_fallback_cache/herdr-git-info-by-pane/window_7:pane_8"
+test -f "$plugin_env_fallback_cache/herdr-git-info-focused"
 IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$plugin_env_fallback_cache/herdr-git-info"
 test "$tag" = "herdrgit1"
 test "$cached_pane_id" = "window/7:pane/8"
@@ -239,6 +242,7 @@ test "$cached_pane_id" = "window/5:pane/6"
 test "$cached_cwd" = "$dirty_repo"
 test "$present" = "1"
 test "$repo" = "dirty-repo"
+test ! -e "$setup_hook_cache/herdr-git-info-focused"
 
 cat > "$fake_herdr" <<'EOF'
 #!/usr/bin/env sh
@@ -256,6 +260,7 @@ env -u HERDR_PLUGIN_EVENT_JSON \
 	XDG_CACHE_HOME="$plugin_no_focus_cache_home" \
 	sh "$root/contrib/herdr-plugin/update-status"
 test ! -e "$plugin_no_focus_cache_home/wezterm/herdr-git-info"
+test ! -e "$plugin_no_focus_cache_home/wezterm/herdr-git-info-focused"
 
 if env -u WEZTERM_GIT_STATUS_BRIDGE_BIN PATH="$tmp/no-bin" /bin/sh "$root/contrib/herdr-plugin/update-status" 2>"$missing_bin_stderr"; then
 	exit 1
