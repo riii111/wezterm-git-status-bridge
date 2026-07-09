@@ -178,6 +178,8 @@ local function pane_id(pane)
 	return tostring(id)
 end
 
+local read_cached_pane_info
+
 local function refresh(pane, options)
 	if not options.auto_update then
 		return false
@@ -196,6 +198,13 @@ local function refresh(pane, options)
 	if last and last.cwd == cwd and now - last.at < options.update_interval_seconds then
 		return false
 	end
+
+	local cached = read_cached_pane_info(options, id)
+	local has_external_cached_cwd = cached and cached.cwd ~= "" and (not last or cached.cwd ~= last.cwd)
+	if has_external_cached_cwd and cached.cwd ~= cwd then
+		return false
+	end
+
 	last_update_by_pane[id] = { at = now, cwd = cwd }
 
 	local args = {
@@ -296,7 +305,40 @@ local function is_fresh(info, options)
 	return options.now() - info.at <= options.max_age_seconds
 end
 
-local function read_git_info(options)
+read_cached_pane_info = function(options, id)
+	if not id or id == "" then
+		return nil
+	end
+	local info = parse_payload(read_line(pane_cache_path(options, id)))
+	if not info or not is_fresh(info, options) or info.herdr_pane_id ~= id then
+		return nil
+	end
+	return info
+end
+
+local function read_current_pane_info(options, pane)
+	local id = pane_id(pane)
+	if not id or id == "" then
+		return nil, false
+	end
+	local info = read_cached_pane_info(options, id)
+	if not info then
+		return nil, false
+	end
+
+	if info.present then
+		return info, true
+	end
+	return nil, true
+end
+
+local function read_git_info(options, pane)
+	-- The second return value means the active pane had a fresh cache entry, including a non-Git cwd.
+	local current, has_current_pane_cache = read_current_pane_info(options, pane)
+	if has_current_pane_cache then
+		return current
+	end
+
 	local focused = parse_payload(read_line(focused_cache_path(options)))
 	if not is_fresh(focused, options) then
 		return nil
@@ -308,10 +350,10 @@ local function read_git_info(options)
 		return nil
 	end
 
-	local pane = parse_payload(read_line(pane_cache_path(options, focused.herdr_pane_id)))
-	if pane and is_fresh(pane, options) and pane.herdr_pane_id == focused.herdr_pane_id and pane.at >= focused.at then
-		if pane.present then
-			return pane
+	local focused_pane = read_cached_pane_info(options, focused.herdr_pane_id)
+	if focused_pane and focused_pane.at >= focused.at then
+		if focused_pane.present then
+			return focused_pane
 		end
 		return nil
 	end
@@ -354,9 +396,9 @@ local function push_git_status(segments, info, options)
 	end
 end
 
-local function git_segments(options)
+local function git_segments(options, pane)
 	local segments = {}
-	local info = read_git_info(options)
+	local info = read_git_info(options, pane)
 
 	if info then
 		push_git_status(segments, info, options)
@@ -366,7 +408,7 @@ local function git_segments(options)
 end
 
 function M.git_segments(options)
-	return git_segments(merge_options(options))
+	return git_segments(merge_options(options), nil)
 end
 
 local function time_segments(options)
@@ -423,7 +465,7 @@ local function status_segments(window, pane, options)
 	local show_git = not options.show_git_for_pane or options.show_git_for_pane(pane)
 
 	if show_git then
-		local git_status_segments = git_segments(options)
+		local git_status_segments = git_segments(options, pane)
 		if #git_status_segments > 0 then
 			if #segments > 0 then
 				push_separator(segments, options)
@@ -491,12 +533,25 @@ local function refresh_and_render(window, pane, options)
 	end
 end
 
+local function active_pane(window, pane)
+	if pane or not window or not window.active_pane then
+		return pane
+	end
+	local ok, value = pcall(function()
+		return window:active_pane()
+	end)
+	if ok then
+		return value
+	end
+	return nil
+end
+
 function M.render(window, pane, options)
 	if options == nil and (pane == nil or type(pane) == "table") then
 		options = pane
 		pane = nil
 	end
-	render(window, pane, merge_options(options))
+	render(window, active_pane(window, pane), merge_options(options))
 end
 
 function M.setup(options)
@@ -507,21 +562,20 @@ function M.setup(options)
 
 	local merged = merge_options(options)
 	wezterm.on("update-right-status", function(window, pane)
-		refresh_and_render(window, pane, merged)
+		refresh_and_render(window, active_pane(window, pane), merged)
 	end)
 	wezterm.on("render-right-status", function(window, pane)
-		local active_pane = pane or window:active_pane()
-		refresh_and_render(window, active_pane, merged)
+		refresh_and_render(window, active_pane(window, pane), merged)
 	end)
 	wezterm.on("window-focus-changed", function(window, pane)
-		refresh_and_render(window, pane, merged)
+		refresh_and_render(window, active_pane(window, pane), merged)
 	end)
 	wezterm.on("window-config-reloaded", function(window, pane)
-		local active_pane = pane or window:active_pane()
+		local pane_to_render = active_pane(window, pane)
 		if merged.on_reload then
-			merged.on_reload(window, active_pane)
+			merged.on_reload(window, pane_to_render)
 		end
-		refresh_and_render(window, active_pane, merged)
+		refresh_and_render(window, pane_to_render, merged)
 	end)
 end
 
