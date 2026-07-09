@@ -63,10 +63,22 @@ end
 local function cache_dir(name)
 	local path = base_dir .. "/" .. name
 	mkdir(path .. "/herdr-git-info-by-pane")
+	mkdir(path .. "/herdr-git-info-by-cwd")
 	return path
 end
 
-local function render(cache, now)
+local function pane_stub(id, cwd)
+	return {
+		pane_id = function()
+			return id
+		end,
+		get_current_working_dir = function()
+			return cwd
+		end,
+	}
+end
+
+local function render(cache, now, pane)
 	local captured = nil
 	local window = {
 		set_right_status = function(_, segments)
@@ -74,27 +86,13 @@ local function render(cache, now)
 		end,
 	}
 
-	right_status.render(window, {
+	right_status.render(window, pane, {
 		cache_dir = cache,
 		now = function()
 			return now
 		end,
 		show_time = false,
 	})
-
-	return captured
-end
-
-local function render_with_options(cache, options)
-	local captured = nil
-	local window = {
-		set_right_status = function(_, segments)
-			captured = segments
-		end,
-	}
-
-	options.cache_dir = cache
-	right_status.render(window, options)
 
 	return captured
 end
@@ -143,13 +141,13 @@ local function render_full(cache, now, active_key_table, pane)
 	return captured
 end
 
-local function git_segments(cache, now)
+local function git_segments(cache, now, pane)
 	return right_status.git_segments({
 		cache_dir = cache,
 		now = function()
 			return now
 		end,
-	})
+	}, pane)
 end
 
 local function segment_text(segments)
@@ -166,24 +164,28 @@ local default_separator = "  \u{e0b3}  "
 
 local function renders_focused_payload()
 	local cache = cache_dir("focused")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
 
-	assert_equal(segment_text(render(cache, 120)), "  repo" .. default_separator .. " main *", "focused payload")
+	assert_equal(
+		segment_text(render(cache, 120, pane_stub("pane1", "/repo"))),
+		"  repo" .. default_separator .. " main *",
+		"focused payload"
+	)
 end
 
 local function hides_stale_payload()
 	local cache = cache_dir("stale")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
 
-	assert_equal(segment_text(render(cache, 500)), "", "stale payload")
+	assert_equal(segment_text(render(cache, 500, pane_stub("pane1", "/repo"))), "", "stale payload")
 end
 
 local function can_disable_stale_payload_ttl()
 	local cache = cache_dir("stale-disabled")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
 
 	assert_equal(
-		segment_text(render_with_options(cache, {
+		segment_text(render_with_pane(cache, pane_stub("pane1", "/repo"), {
 			max_age_seconds = false,
 			now = function()
 				return 500
@@ -197,105 +199,95 @@ end
 
 local function ignores_invalid_payloads()
 	local cache = cache_dir("invalid-payload")
-	write_file(cache .. "/herdr-git-info", "wrong\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "wrong\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
 
-	assert_equal(segment_text(render(cache, 120)), "", "invalid tag")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\t\tmain\t\n")
-	assert_equal(segment_text(render(cache, 120)), "", "missing repo")
+	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "invalid tag")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\t\tmain\t\n")
+	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "missing repo")
 end
 
-local function prefers_newer_per_pane_payload()
+local function prefers_newer_per_pane_cache_over_cwd_cache()
 	local cache = cache_dir("per-pane")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo"),
+		"herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n"
+	)
 	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t120\tpane1\t/repo\t1\trepo\tfeature\tw\n")
 
-	assert_equal(segment_text(render(cache, 130)), "  repo" .. default_separator .. "󰙅  feature", "per-pane payload")
+	assert_equal(
+		segment_text(render(cache, 130, pane_stub("pane1", "/repo"))),
+		"  repo" .. default_separator .. "󰙅  feature",
+		"newer per-pane cache"
+	)
+end
+
+local function prefers_newer_cwd_cache_over_stale_pane_cache()
+	local cache = cache_dir("newer-cwd")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo"),
+		"herdrgit1\t220\twE:p1\t/repo\t1\trepo\tfeature\t\n"
+	)
+	write_file(cache .. "/herdr-git-info-by-pane/0", "herdrgit1\t100\t0\t/repo\t1\trepo\tmain\t\n")
+
+	assert_equal(
+		segment_text(render(cache, 230, pane_stub(0, "/repo"))),
+		"  repo" .. default_separator .. " feature",
+		"newer cwd cache"
+	)
 end
 
 local function uses_sanitized_per_pane_path()
 	local cache = cache_dir("dot-pane")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\t..\t/repo\t1\trepo\tmain\t\n")
 	write_file(cache .. "/herdr-git-info-by-pane/_", "herdrgit1\t120\t..\t/repo\t1\trepo\tfeature\t\n")
 
-	assert_equal(segment_text(render(cache, 130)), "  repo" .. default_separator .. " feature", "sanitized per-pane path")
+	assert_equal(
+		segment_text(render(cache, 130, pane_stub("..", "/repo"))),
+		"  repo" .. default_separator .. " feature",
+		"sanitized per-pane path"
+	)
 end
 
 local function uses_slash_sanitized_per_pane_path()
 	local cache = cache_dir("slash-pane")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tw1/p1\t/repo\t1\trepo\tmain\t\n")
 	write_file(cache .. "/herdr-git-info-by-pane/w1_p1", "herdrgit1\t120\tw1/p1\t/repo\t1\trepo\tfeature\t\n")
 
-	assert_equal(segment_text(render(cache, 130)), "  repo" .. default_separator .. " feature", "slash pane path")
-end
-
-local function prefers_current_pane_cache_over_global_cache()
-	local cache = cache_dir("current-pane")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
-	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
-
-	local pane = {
-		pane_id = function()
-			return 55
-		end,
-		get_current_working_dir = function()
-			return "/repo-current"
-		end,
-	}
-
 	assert_equal(
-		segment_text(render_with_pane(cache, pane, {
-			now = function()
-				return 220
-			end,
-			show_time = false,
-		})),
-		"  current-repo" .. default_separator .. " feature",
-		"current pane cache"
+		segment_text(render(cache, 130, pane_stub("w1/p1", "/repo"))),
+		"  repo" .. default_separator .. " feature",
+		"slash pane path"
 	)
 end
 
-local function current_pane_cwd_mismatch_still_uses_pane_cache()
+local function current_pane_cwd_mismatch_falls_back_to_cwd_cache()
 	local cache = cache_dir("current-pane-cwd-mismatch")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-old"),
+		"herdrgit1\t200\t3\t/repo-old\t1\tcwd-repo\tmain\t\n"
+	)
 	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
 
-	local pane = {
-		pane_id = function()
-			return 55
-		end,
-		get_current_working_dir = function()
-			return "/repo-old"
-		end,
-	}
-
 	assert_equal(
-		segment_text(render_with_pane(cache, pane, {
+		segment_text(render_with_pane(cache, pane_stub(55, "/repo-old"), {
 			now = function()
 				return 220
 			end,
 			show_time = false,
 		})),
-		"  current-repo" .. default_separator .. " feature",
+		"  cwd-repo" .. default_separator .. " main",
 		"current pane cwd mismatch"
 	)
 end
 
-local function current_pane_absent_status_hides_global_cache()
+local function current_pane_absent_status_hides_cwd_cache()
 	local cache = cache_dir("current-pane-absent")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/not-git"),
+		"herdrgit1\t200\t3\t/not-git\t1\tcwd-repo\tmain\t\n"
+	)
 	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/not-git\t0\t\t\t\n")
 
-	local pane = {
-		pane_id = function()
-			return 55
-		end,
-		get_current_working_dir = function()
-			return "/not-git"
-		end,
-	}
-
 	assert_equal(
-		segment_text(render_with_pane(cache, pane, {
+		segment_text(render_with_pane(cache, pane_stub(55, "/not-git"), {
 			now = function()
 				return 220
 			end,
@@ -306,63 +298,125 @@ local function current_pane_absent_status_hides_global_cache()
 	)
 end
 
-local function stale_current_pane_cache_falls_back_to_global_cache()
-	local cache = cache_dir("current-pane-stale")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t400\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
-	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t100\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
-
-	local pane = {
-		pane_id = function()
-			return 55
-		end,
-		get_current_working_dir = function()
-			return "/repo-current"
-		end,
-	}
+local function mismatched_absent_pane_cache_falls_back_to_cwd_cache()
+	local cache = cache_dir("current-pane-absent-mismatch")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-cwd"),
+		"herdrgit1\t200\twE:p1\t/repo-cwd\t1\tcwd-repo\tmain\t\n"
+	)
+	write_file(cache .. "/herdr-git-info-by-pane/0", "herdrgit1\t210\t0\t/Users/ichinose\t0\t\t\t\n")
 
 	assert_equal(
-		segment_text(render_with_pane(cache, pane, {
+		segment_text(render_with_pane(cache, pane_stub(0, "/repo-cwd"), {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"  cwd-repo" .. default_separator .. " main",
+		"mismatched absent pane cache"
+	)
+end
+
+local function stale_current_pane_cache_falls_back_to_cwd_cache()
+	local cache = cache_dir("current-pane-stale")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-current"),
+		"herdrgit1\t400\twE:p1\t/repo-current\t1\tcwd-repo\tmain\t\n"
+	)
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t100\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane_stub(55, "/repo-current"), {
 			now = function()
 				return 500
 			end,
 			show_time = false,
 		})),
-		"  global-repo" .. default_separator .. " main",
+		"  cwd-repo" .. default_separator .. " main",
 		"stale current pane fallback"
 	)
 end
 
 local function current_pane_cache_rejects_payload_id_mismatch()
 	local cache = cache_dir("current-pane-id-mismatch")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-current"),
+		"herdrgit1\t200\twE:p1\t/repo-current\t1\tcwd-repo\tmain\t\n"
+	)
 	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t99\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
 
-	local pane = {
-		pane_id = function()
-			return 55
-		end,
-		get_current_working_dir = function()
-			return "/repo-current"
-		end,
-	}
-
 	assert_equal(
-		segment_text(render_with_pane(cache, pane, {
+		segment_text(render_with_pane(cache, pane_stub(55, "/repo-current"), {
 			now = function()
 				return 220
 			end,
 			show_time = false,
 		})),
-		"  global-repo" .. default_separator .. " main",
+		"  cwd-repo" .. default_separator .. " main",
 		"current pane id mismatch"
+	)
+end
+
+local function prefers_cwd_cache_when_pane_cache_is_absent()
+	local cache = cache_dir("cwd-join")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-cwd"),
+		"herdrgit1\t210\twE:p1\t/repo-cwd\t1\tcwd-repo\tfeature\t\n"
+	)
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane_stub(0, "/repo-cwd"), {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"  cwd-repo" .. default_separator .. " feature",
+		"cwd join"
+	)
+end
+
+local function cwd_cache_rejects_payload_cwd_mismatch()
+	local cache = cache_dir("cwd-mismatch")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-cwd"),
+		"herdrgit1\t210\twE:p1\t/other-window\t1\tcwd-repo\tfeature\t\n"
+	)
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane_stub(0, "/repo-cwd"), {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"",
+		"cwd mismatch"
+	)
+end
+
+local function does_not_use_global_cache_across_windows()
+	local cache = cache_dir("no-global")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t210\twE:p1\t/other-window\t1\tglobal-repo\tmain\t\n")
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane_stub(0, "/repo-current"), {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"",
+		"no global fallback"
 	)
 end
 
 local function exposes_composable_git_segments()
 	local cache = cache_dir("segments")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
 
-	local segments, info = git_segments(cache, 120)
+	local segments, info = git_segments(cache, 120, pane_stub("pane1", "/repo"))
 
 	assert_equal(info.repo, "repo", "segment info repo")
 	assert_equal(segment_text(segments), "  repo" .. default_separator .. " main *", "segment text")
@@ -370,10 +424,10 @@ end
 
 local function renders_detached_rebase_and_pick_flags()
 	local cache = cache_dir("flags")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tdeadbee\tDRC\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tdeadbee\tDRC\n")
 
 	assert_equal(
-		segment_text(render(cache, 120)),
+		segment_text(render(cache, 120, pane_stub("pane1", "/repo"))),
 		"  repo" .. default_separator .. " deadbee REBASE PICK",
 		"detached rebase pick flags"
 	)
@@ -381,10 +435,10 @@ end
 
 local function treats_two_argument_table_as_options()
 	local cache = cache_dir("two-arg-options")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
 
 	assert_equal(
-		segment_text(render_with_options(cache, {
+		segment_text(render_with_pane(cache, pane_stub("pane1", "/repo"), {
 			separator = " / ",
 			now = function()
 				return 120
@@ -398,10 +452,13 @@ end
 
 local function renders_mode_git_and_time()
 	local cache = cache_dir("full")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
+
+	local pane = pane_stub("pane1", "/repo")
+	pane.is_herdr = true
 
 	assert_equal(
-		segment_text(render_full(cache, 120, "herdr", { is_herdr = true })),
+		segment_text(render_full(cache, 120, "herdr", pane)),
 		" HERDR  /   repo /  main * /  Mon Jan 1 00:00  ",
 		"mode git time"
 	)
@@ -409,7 +466,7 @@ end
 
 local function hides_git_when_pane_filter_rejects()
 	local cache = cache_dir("pane-filter")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\td\n")
 
 	assert_equal(
 		segment_text(render_full(cache, 120, "herdr", { is_herdr = false })),
@@ -420,9 +477,9 @@ end
 
 local function hides_absent_payload()
 	local cache = cache_dir("absent")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t100\tpane1\t/repo\t0\t\t\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t0\t\t\t\n")
 
-	assert_equal(segment_text(render(cache, 120)), "", "absent payload")
+	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "absent payload")
 end
 
 local function setup_is_idempotent()
@@ -596,17 +653,13 @@ local function update_event_without_pane_prefers_active_pane_cache()
 	right_status._setup_done = nil
 
 	local cache = cache_dir("update-active-pane")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-current"),
+		"herdrgit1\t200\t3\t/repo-current\t1\tcwd-repo\tmain\t\n"
+	)
 	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
 
-	local pane = {
-		pane_id = function()
-			return 55
-		end,
-		get_current_working_dir = function()
-			return "/repo-current"
-		end,
-	}
+	local pane = pane_stub(55, "/repo-current")
 	local captured = nil
 	local window = {
 		active_pane = function()
@@ -632,17 +685,13 @@ end
 
 local function render_without_pane_prefers_window_active_pane_cache()
 	local cache = cache_dir("render-active-pane")
-	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-current"),
+		"herdrgit1\t200\t3\t/repo-current\t1\tcwd-repo\tmain\t\n"
+	)
 	write_file(cache .. "/herdr-git-info-by-pane/56", "herdrgit1\t210\t56\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
 
-	local pane = {
-		pane_id = function()
-			return 56
-		end,
-		get_current_working_dir = function()
-			return "/repo-current"
-		end,
-	}
+	local pane = pane_stub(56, "/repo-current")
 	local captured = nil
 	local window = {
 		active_pane = function()
@@ -664,7 +713,7 @@ local function render_without_pane_prefers_window_active_pane_cache()
 	assert_equal(segment_text(captured), "  current-repo" .. default_separator .. " feature", "render active pane")
 end
 
-local function refresh_skips_mismatched_cached_cwd()
+local function refresh_rewrites_mismatched_cached_cwd()
 	_G.wezterm_background_processes = {}
 	local cache = cache_dir("refresh-cached-cwd-mismatch")
 	write_file(cache .. "/herdr-git-info-by-pane/57", "herdrgit1\t210\t57\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
@@ -685,11 +734,12 @@ local function refresh_skips_mismatched_cached_cwd()
 		end,
 	})
 
-	assert_equal(launched, false, "refresh cached cwd mismatch")
-	assert_equal(#_G.wezterm_background_processes, 0, "refresh cached cwd mismatch process count")
+	assert_equal(launched, true, "refresh rewrites mismatched cached cwd")
+	assert_equal(#_G.wezterm_background_processes, 1, "refresh rewrites mismatched cached cwd process count")
+	assert_equal(_G.wezterm_background_processes[1][6], "/repo-old", "refresh rewrites mismatched cached cwd cwd")
 end
 
-local function refresh_allows_cwd_change_from_own_cached_cwd()
+local function refresh_allows_cwd_change_from_cached_cwd()
 	_G.wezterm_background_processes = {}
 	local cache = cache_dir("refresh-own-cached-cwd-change")
 	local cwd = "/repo-old"
@@ -717,9 +767,9 @@ local function refresh_allows_cwd_change_from_own_cached_cwd()
 	now = 221
 	launched = right_status.refresh(pane, options)
 
-	assert_equal(launched, true, "refresh own cached cwd change")
-	assert_equal(#_G.wezterm_background_processes, 2, "refresh own cached cwd change process count")
-	assert_equal(_G.wezterm_background_processes[2][6], "/repo-next", "refresh own cached cwd change cwd")
+	assert_equal(launched, true, "refresh cached cwd change")
+	assert_equal(#_G.wezterm_background_processes, 2, "refresh cached cwd change process count")
+	assert_equal(_G.wezterm_background_processes[2][6], "/repo-next", "refresh cached cwd change cwd")
 end
 
 local function refresh_without_background_api_does_not_throttle()
@@ -877,8 +927,8 @@ local function render_event_uses_active_pane_fallback()
 	assert_equal(_G.wezterm_background_processes[1][4], "52", "render event pane id")
 end
 
-local function render_generated_cache(cache, now)
-	return segment_text(render_with_options(cache, {
+local function render_generated_cache(cache, now, pane_id, cwd)
+	return segment_text(render_with_pane(cache, pane_stub(pane_id, cwd), {
 		now = function()
 			return now
 		end,
@@ -896,20 +946,25 @@ end
 
 local function run_e2e_assertions()
 	assert_equal(
-		render_generated_cache(arg[3], tonumber(arg[4])),
-		generated_git_text(arg[5], arg[6], false),
+		render_generated_cache(arg[3], tonumber(arg[4]), arg[5], arg[6]),
+		generated_git_text(arg[7], arg[8], false),
 		"e2e clean repository"
 	)
 	assert_equal(
-		render_generated_cache(arg[7], tonumber(arg[8])),
-		generated_git_text(arg[9], arg[10], true),
+		render_generated_cache(arg[9], tonumber(arg[10]), arg[11], arg[12]),
+		generated_git_text(arg[13], arg[14], true),
 		"e2e dirty repository"
 	)
-	assert_equal(render_generated_cache(arg[11], tonumber(arg[12])), "", "e2e non-repository")
+	assert_equal(render_generated_cache(arg[15], tonumber(arg[16]), arg[17], arg[18]), "", "e2e non-repository")
 	assert_equal(
-		render_generated_cache(arg[13], tonumber(arg[14])),
-		generated_git_text(arg[15], arg[16], false),
+		render_generated_cache(arg[19], tonumber(arg[20]), arg[21], arg[22]),
+		generated_git_text(arg[23], arg[24], false),
 		"e2e plain wezterm pane"
+	)
+	assert_equal(
+		render_generated_cache(arg[25], tonumber(arg[26]), arg[27], arg[28]),
+		generated_git_text(arg[29], arg[30], false),
+		"e2e cwd join"
 	)
 end
 
@@ -918,14 +973,18 @@ local function run_unit_assertions()
 	hides_stale_payload()
 	can_disable_stale_payload_ttl()
 	ignores_invalid_payloads()
-	prefers_newer_per_pane_payload()
+	prefers_newer_per_pane_cache_over_cwd_cache()
+	prefers_newer_cwd_cache_over_stale_pane_cache()
 	uses_sanitized_per_pane_path()
 	uses_slash_sanitized_per_pane_path()
-	prefers_current_pane_cache_over_global_cache()
-	current_pane_cwd_mismatch_still_uses_pane_cache()
-	current_pane_absent_status_hides_global_cache()
-	stale_current_pane_cache_falls_back_to_global_cache()
+	current_pane_cwd_mismatch_falls_back_to_cwd_cache()
+	current_pane_absent_status_hides_cwd_cache()
+	mismatched_absent_pane_cache_falls_back_to_cwd_cache()
+	stale_current_pane_cache_falls_back_to_cwd_cache()
 	current_pane_cache_rejects_payload_id_mismatch()
+	prefers_cwd_cache_when_pane_cache_is_absent()
+	cwd_cache_rejects_payload_cwd_mismatch()
+	does_not_use_global_cache_across_windows()
 	exposes_composable_git_segments()
 	renders_detached_rebase_and_pick_flags()
 	treats_two_argument_table_as_options()
@@ -939,8 +998,8 @@ local function run_unit_assertions()
 	setup_can_disable_background_refreshes()
 	update_event_without_pane_prefers_active_pane_cache()
 	render_without_pane_prefers_window_active_pane_cache()
-	refresh_skips_mismatched_cached_cwd()
-	refresh_allows_cwd_change_from_own_cached_cwd()
+	refresh_rewrites_mismatched_cached_cwd()
+	refresh_allows_cwd_change_from_cached_cwd()
 	refresh_without_background_api_does_not_throttle()
 	refresh_rejects_remote_cwd()
 	render_event_uses_active_pane_fallback()

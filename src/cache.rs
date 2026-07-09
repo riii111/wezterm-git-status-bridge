@@ -30,6 +30,13 @@ pub fn write_payload(cache_dir: &Path, payload: &Payload) -> Result<(), CacheErr
         &payload.encode_line(),
     )?;
 
+    let cwd_cache_dir = cache_dir.join("herdr-git-info-by-cwd");
+    fs::create_dir_all(&cwd_cache_dir)?;
+    atomic_write(
+        &cwd_cache_dir.join(cwd_cache_key(&payload.cwd)),
+        &payload.encode_line(),
+    )?;
+
     Ok(())
 }
 
@@ -50,18 +57,33 @@ fn sanitize_pane_id(pane_id: &str) -> String {
     }
 }
 
+// Stable across writers/readers; not a cryptographic hash.
+pub fn cwd_cache_key(cwd: &Path) -> String {
+    fnv1a32_hex(&cwd.to_string_lossy())
+}
+
+fn fnv1a32_hex(value: &str) -> String {
+    let mut hash: u32 = 2_166_136_261;
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    format!("{hash:08x}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use tempfile::TempDir;
 
     use crate::payload::Payload;
 
-    use super::write_payload;
+    use super::{cwd_cache_key, write_payload};
 
     #[test]
-    fn writes_global_and_per_pane_cache_files() {
+    fn writes_global_per_pane_and_per_cwd_cache_files() {
         let temp = TempDir::new().expect("create temp dir");
         let payload = Payload {
             at: 123,
@@ -81,6 +103,15 @@ mod tests {
                 .expect("read pane cache"),
             payload.encode_line()
         );
+        assert_eq!(
+            fs::read_to_string(
+                temp.path()
+                    .join("herdr-git-info-by-cwd")
+                    .join(cwd_cache_key(Path::new("/repo")))
+            )
+            .expect("read cwd cache"),
+            payload.encode_line()
+        );
     }
 
     #[test]
@@ -96,5 +127,18 @@ mod tests {
         write_payload(temp.path(), &payload).expect("write payload");
 
         assert!(temp.path().join("herdr-git-info-by-pane/_").is_file());
+    }
+
+    #[test]
+    fn cwd_cache_key_is_stable_for_path() {
+        assert_eq!(cwd_cache_key(Path::new("/repo")), "81f9fa62");
+        assert_eq!(
+            cwd_cache_key(Path::new("/repo")),
+            cwd_cache_key(Path::new("/repo"))
+        );
+        assert_ne!(
+            cwd_cache_key(Path::new("/repo")),
+            cwd_cache_key(Path::new("/other"))
+        );
     }
 }
