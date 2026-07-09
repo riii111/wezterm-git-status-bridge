@@ -99,6 +99,20 @@ local function render_with_options(cache, options)
 	return captured
 end
 
+local function render_with_pane(cache, pane, options)
+	local captured = nil
+	local window = {
+		set_right_status = function(_, segments)
+			captured = segments
+		end,
+	}
+
+	options.cache_dir = cache
+	right_status.render(window, pane, options)
+
+	return captured
+end
+
 local function render_full(cache, now, active_key_table, pane)
 	local captured = nil
 	local window = {
@@ -212,6 +226,136 @@ local function uses_slash_sanitized_per_pane_path()
 	write_file(cache .. "/herdr-git-info-by-pane/w1_p1", "herdrgit1\t120\tw1/p1\t/repo\t1\trepo\tfeature\t\n")
 
 	assert_equal(segment_text(render(cache, 130)), "  repo" .. default_separator .. " feature", "slash pane path")
+end
+
+local function prefers_current_pane_cache_over_global_cache()
+	local cache = cache_dir("current-pane")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 55
+		end,
+		get_current_working_dir = function()
+			return "/repo-current"
+		end,
+	}
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane, {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"  current-repo" .. default_separator .. " feature",
+		"current pane cache"
+	)
+end
+
+local function current_pane_cwd_mismatch_still_uses_pane_cache()
+	local cache = cache_dir("current-pane-cwd-mismatch")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 55
+		end,
+		get_current_working_dir = function()
+			return "/repo-old"
+		end,
+	}
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane, {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"  current-repo" .. default_separator .. " feature",
+		"current pane cwd mismatch"
+	)
+end
+
+local function current_pane_absent_status_hides_global_cache()
+	local cache = cache_dir("current-pane-absent")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/not-git\t0\t\t\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 55
+		end,
+		get_current_working_dir = function()
+			return "/not-git"
+		end,
+	}
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane, {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"",
+		"current pane absent status"
+	)
+end
+
+local function stale_current_pane_cache_falls_back_to_global_cache()
+	local cache = cache_dir("current-pane-stale")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t400\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t100\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 55
+		end,
+		get_current_working_dir = function()
+			return "/repo-current"
+		end,
+	}
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane, {
+			now = function()
+				return 500
+			end,
+			show_time = false,
+		})),
+		"  global-repo" .. default_separator .. " main",
+		"stale current pane fallback"
+	)
+end
+
+local function current_pane_cache_rejects_payload_id_mismatch()
+	local cache = cache_dir("current-pane-id-mismatch")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t99\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 55
+		end,
+		get_current_working_dir = function()
+			return "/repo-current"
+		end,
+	}
+
+	assert_equal(
+		segment_text(render_with_pane(cache, pane, {
+			now = function()
+				return 220
+			end,
+			show_time = false,
+		})),
+		"  global-repo" .. default_separator .. " main",
+		"current pane id mismatch"
+	)
 end
 
 local function exposes_composable_git_segments()
@@ -445,10 +589,144 @@ local function setup_can_disable_background_refreshes()
 	assert_equal(#_G.wezterm_background_processes, 0, "disabled background refresh")
 end
 
+local function update_event_without_pane_prefers_active_pane_cache()
+	_G.wezterm_handlers = {}
+	_G.wezterm_background_processes = {}
+	_G.wezterm_timers = {}
+	right_status._setup_done = nil
+
+	local cache = cache_dir("update-active-pane")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 55
+		end,
+		get_current_working_dir = function()
+			return "/repo-current"
+		end,
+	}
+	local captured = nil
+	local window = {
+		active_pane = function()
+			return pane
+		end,
+		set_right_status = function(_, segments)
+			captured = segments
+		end,
+	}
+
+	right_status.setup({
+		cache_dir = cache,
+		auto_update = false,
+		now = function()
+			return 220
+		end,
+		show_time = false,
+	})
+	handler("update-right-status")(window, nil)
+
+	assert_equal(segment_text(captured), "  current-repo" .. default_separator .. " feature", "update event active pane")
+end
+
+local function render_without_pane_prefers_window_active_pane_cache()
+	local cache = cache_dir("render-active-pane")
+	write_file(cache .. "/herdr-git-info", "herdrgit1\t200\t3\t/repo-global\t1\tglobal-repo\tmain\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/56", "herdrgit1\t210\t56\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 56
+		end,
+		get_current_working_dir = function()
+			return "/repo-current"
+		end,
+	}
+	local captured = nil
+	local window = {
+		active_pane = function()
+			return pane
+		end,
+		set_right_status = function(_, segments)
+			captured = segments
+		end,
+	}
+
+	right_status.render(window, {
+		cache_dir = cache,
+		now = function()
+			return 220
+		end,
+		show_time = false,
+	})
+
+	assert_equal(segment_text(captured), "  current-repo" .. default_separator .. " feature", "render active pane")
+end
+
+local function refresh_skips_mismatched_cached_cwd()
+	_G.wezterm_background_processes = {}
+	local cache = cache_dir("refresh-cached-cwd-mismatch")
+	write_file(cache .. "/herdr-git-info-by-pane/57", "herdrgit1\t210\t57\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	local pane = {
+		pane_id = function()
+			return 57
+		end,
+		get_current_working_dir = function()
+			return "/repo-old"
+		end,
+	}
+
+	local launched = right_status.refresh(pane, {
+		cache_dir = cache,
+		now = function()
+			return 220
+		end,
+	})
+
+	assert_equal(launched, false, "refresh cached cwd mismatch")
+	assert_equal(#_G.wezterm_background_processes, 0, "refresh cached cwd mismatch process count")
+end
+
+local function refresh_allows_cwd_change_from_own_cached_cwd()
+	_G.wezterm_background_processes = {}
+	local cache = cache_dir("refresh-own-cached-cwd-change")
+	local cwd = "/repo-old"
+	local pane = {
+		pane_id = function()
+			return 58
+		end,
+		get_current_working_dir = function()
+			return cwd
+		end,
+	}
+	local now = 220
+	local options = {
+		cache_dir = cache,
+		now = function()
+			return now
+		end,
+	}
+
+	local launched = right_status.refresh(pane, options)
+	assert_equal(launched, true, "initial refresh")
+	write_file(cache .. "/herdr-git-info-by-pane/58", "herdrgit1\t220\t58\t/repo-old\t1\told-repo\tmain\t\n")
+
+	cwd = "/repo-next"
+	now = 221
+	launched = right_status.refresh(pane, options)
+
+	assert_equal(launched, true, "refresh own cached cwd change")
+	assert_equal(#_G.wezterm_background_processes, 2, "refresh own cached cwd change process count")
+	assert_equal(_G.wezterm_background_processes[2][6], "/repo-next", "refresh own cached cwd change cwd")
+end
+
 local function refresh_without_background_api_does_not_throttle()
 	_G.wezterm_background_processes = {}
 	local wezterm_module = package.loaded.wezterm
 	local original_background_child_process = wezterm_module.background_child_process
+	local cache = cache_dir("missing-background-api")
 	local pane = {
 		pane_id = function()
 			return 44
@@ -461,6 +739,7 @@ local function refresh_without_background_api_does_not_throttle()
 
 	wezterm_module.background_child_process = nil
 	local launched = right_status.refresh(pane, {
+		cache_dir = cache,
 		now = function()
 			return now
 		end,
@@ -469,6 +748,7 @@ local function refresh_without_background_api_does_not_throttle()
 
 	wezterm_module.background_child_process = original_background_child_process
 	launched = right_status.refresh(pane, {
+		cache_dir = cache,
 		now = function()
 			return now
 		end,
@@ -479,6 +759,7 @@ end
 
 local function refresh_rejects_remote_cwd()
 	_G.wezterm_background_processes = {}
+	local cache = cache_dir("refresh-cwd")
 	local remote_file_pane = {
 		pane_id = function()
 			return 46
@@ -544,16 +825,16 @@ local function refresh_rejects_remote_cwd()
 	local wezterm_module = package.loaded.wezterm
 	local original_hostname = wezterm_module.hostname
 
-	assert_equal(right_status.refresh(remote_file_pane), false, "remote file cwd")
-	assert_equal(right_status.refresh(non_file_pane), false, "non-file cwd")
-	assert_equal(right_status.refresh(malformed_file_uri_pane), false, "malformed file uri")
-	assert_equal(right_status.refresh(local_file_pane), true, "local file cwd")
-	assert_equal(right_status.refresh(plain_percent_path_pane), true, "plain percent path")
-	assert_equal(right_status.refresh(local_fqdn_pane), true, "local fqdn cwd")
+	assert_equal(right_status.refresh(remote_file_pane, { cache_dir = cache }), false, "remote file cwd")
+	assert_equal(right_status.refresh(non_file_pane, { cache_dir = cache }), false, "non-file cwd")
+	assert_equal(right_status.refresh(malformed_file_uri_pane, { cache_dir = cache }), false, "malformed file uri")
+	assert_equal(right_status.refresh(local_file_pane, { cache_dir = cache }), true, "local file cwd")
+	assert_equal(right_status.refresh(plain_percent_path_pane, { cache_dir = cache }), true, "plain percent path")
+	assert_equal(right_status.refresh(local_fqdn_pane, { cache_dir = cache }), true, "local fqdn cwd")
 	wezterm_module.hostname = function()
 		return "local-host.example.com"
 	end
-	assert_equal(right_status.refresh(local_short_from_fqdn_pane), true, "local short cwd from fqdn hostname")
+	assert_equal(right_status.refresh(local_short_from_fqdn_pane, { cache_dir = cache }), true, "local short cwd from fqdn hostname")
 	wezterm_module.hostname = original_hostname
 	assert_equal(#_G.wezterm_background_processes, 4, "local refresh count")
 	assert_equal(_G.wezterm_background_processes[1][6], "/repo one", "local decoded cwd")
@@ -640,6 +921,11 @@ local function run_unit_assertions()
 	prefers_newer_per_pane_payload()
 	uses_sanitized_per_pane_path()
 	uses_slash_sanitized_per_pane_path()
+	prefers_current_pane_cache_over_global_cache()
+	current_pane_cwd_mismatch_still_uses_pane_cache()
+	current_pane_absent_status_hides_global_cache()
+	stale_current_pane_cache_falls_back_to_global_cache()
+	current_pane_cache_rejects_payload_id_mismatch()
 	exposes_composable_git_segments()
 	renders_detached_rebase_and_pick_flags()
 	treats_two_argument_table_as_options()
@@ -651,6 +937,10 @@ local function run_unit_assertions()
 	setup_does_not_refresh_unfocused_window()
 	setup_throttles_background_refreshes()
 	setup_can_disable_background_refreshes()
+	update_event_without_pane_prefers_active_pane_cache()
+	render_without_pane_prefers_window_active_pane_cache()
+	refresh_skips_mismatched_cached_cwd()
+	refresh_allows_cwd_change_from_own_cached_cwd()
 	refresh_without_background_api_does_not_throttle()
 	refresh_rejects_remote_cwd()
 	render_event_uses_active_pane_fallback()
