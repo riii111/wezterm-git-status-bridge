@@ -10,6 +10,18 @@ use crate::git_status::{self, GitStatusError};
 use crate::payload::Payload;
 use crate::setup::{self, SetupError};
 
+#[derive(Debug)]
+struct ResolvedContext {
+    context: PaneContext,
+    cache_write: CacheWrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CacheWrite {
+    Default,
+    HerdrFocused,
+}
+
 #[derive(Debug, Parser)]
 #[command(version, about)]
 pub struct Cli {
@@ -90,30 +102,34 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
 }
 
 fn update(args: UpdateArgs) -> Result<(), CliError> {
-    let Some(context) = resolve_context(&args)? else {
+    let Some(resolved) = resolve_update_context(&args)? else {
         return Ok(());
     };
-    let repository = git_status::collect(&context.cwd)?;
+    let repository = git_status::collect(&resolved.context.cwd)?;
     let payload = Payload {
         at: unix_now()?,
-        pane_id: context.pane_id,
-        cwd: context.cwd,
+        pane_id: resolved.context.pane_id,
+        cwd: resolved.context.cwd,
         repository,
     };
 
-    cache::write_payload(
-        &args.cache_dir.unwrap_or_else(cache::default_cache_dir),
-        &payload,
-    )?;
+    let cache_dir = args.cache_dir.unwrap_or_else(cache::default_cache_dir);
+    match resolved.cache_write {
+        CacheWrite::Default => cache::write_payload(&cache_dir, &payload)?,
+        CacheWrite::HerdrFocused => cache::write_payload_with_focused(&cache_dir, &payload)?,
+    }
     Ok(())
 }
 
-fn resolve_context(args: &UpdateArgs) -> Result<Option<PaneContext>, CliError> {
+fn resolve_update_context(args: &UpdateArgs) -> Result<Option<ResolvedContext>, CliError> {
     match (&args.pane_id, &args.cwd) {
         (Some(pane_id), Some(cwd)) => {
-            return Ok(Some(PaneContext {
-                pane_id: pane_id.clone(),
-                cwd: cwd.clone(),
+            return Ok(Some(ResolvedContext {
+                context: PaneContext {
+                    pane_id: pane_id.clone(),
+                    cwd: cwd.clone(),
+                },
+                cache_write: CacheWrite::Default,
             }));
         }
         (None, None) => {}
@@ -127,7 +143,10 @@ fn resolve_context(args: &UpdateArgs) -> Result<Option<PaneContext>, CliError> {
         .transpose()?
         .flatten()
     {
-        return Ok(Some(context));
+        return Ok(Some(ResolvedContext {
+            context,
+            cache_write: CacheWrite::HerdrFocused,
+        }));
     }
 
     if let Some(context) = std::env::var("HERDR_PLUGIN_EVENT_JSON")
@@ -137,7 +156,10 @@ fn resolve_context(args: &UpdateArgs) -> Result<Option<PaneContext>, CliError> {
         .transpose()?
         .flatten()
     {
-        return Ok(Some(context));
+        return Ok(Some(ResolvedContext {
+            context,
+            cache_write: CacheWrite::HerdrFocused,
+        }));
     }
 
     Ok(None)
@@ -158,7 +180,11 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{CliError, UpdateArgs, resolve_context, update};
+    use super::{CliError, UpdateArgs, resolve_update_context, update};
+
+    fn resolve_context(args: &UpdateArgs) -> Result<Option<super::PaneContext>, CliError> {
+        Ok(resolve_update_context(args)?.map(|resolved| resolved.context))
+    }
 
     #[test]
     fn update_writes_cache_from_explicit_context() {
@@ -176,6 +202,7 @@ mod tests {
         let global = fs::read_to_string(cache.path().join("herdr-git-info")).expect("read cache");
         assert!(global.contains("\tw1:p1\t"));
         assert!(global.contains("\t0\t\t\t\n"));
+        assert!(!cache.path().join("herdr-git-info-focused").exists());
     }
 
     #[test]
@@ -195,6 +222,28 @@ mod tests {
         assert!(global.contains("\tw1:p1\t"));
         assert!(global.contains("\t1\t"));
         assert!(global.contains("\tmain\t"));
+    }
+
+    #[test]
+    fn event_json_update_writes_focused_cache() {
+        let cache = TempDir::new().expect("create cache dir");
+        let repo = git_repo();
+
+        update(UpdateArgs {
+            cache_dir: Some(cache.path().to_path_buf()),
+            event_json: Some(format!(
+                r#"{{"pane":{{"pane_id":"w1:p1","cwd":"{}"}}}}"#,
+                repo.path().display()
+            )),
+            ..UpdateArgs::default()
+        })
+        .expect("update cache");
+
+        let focused = fs::read_to_string(cache.path().join("herdr-git-info-focused"))
+            .expect("read focused cache");
+        assert!(focused.contains("\tw1:p1\t"));
+        assert!(focused.contains("\t1\t"));
+        assert!(focused.contains("\tmain\t"));
     }
 
     #[test]

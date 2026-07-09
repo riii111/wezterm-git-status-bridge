@@ -67,13 +67,16 @@ local function cache_dir(name)
 	return path
 end
 
-local function pane_stub(id, cwd)
+local function pane_stub(id, cwd, process_name)
 	return {
 		pane_id = function()
 			return id
 		end,
 		get_current_working_dir = function()
 			return cwd
+		end,
+		get_foreground_process_name = function()
+			return process_name
 		end,
 	}
 end
@@ -380,6 +383,77 @@ local function cwd_cache_rejects_payload_cwd_mismatch()
 		})),
 		"",
 		"cwd mismatch"
+	)
+end
+
+local function herdr_host_prefers_focused_cache_over_host_caches()
+	local cache = cache_dir("herdr-host-focused")
+	write_file(cache .. "/herdr-git-info-focused", "herdrgit1\t150\twZ:p1\t/repo-focused\t1\tfocused-repo\tsqlite\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/1", "herdrgit1\t210\t1\t/repo-host\t1\thost-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-host"),
+		"herdrgit1\t220\t1\t/repo-host\t1\thost-repo\tmain\t\n"
+	)
+
+	assert_equal(
+		segment_text(render(cache, 230, pane_stub(1, "/repo-host", "/opt/homebrew/bin/herdr"))),
+		"  focused-repo" .. default_separator .. " sqlite",
+		"herdr host focused cache"
+	)
+end
+
+local function herdr_host_prefers_newer_focused_cwd_cache()
+	local cache = cache_dir("herdr-host-focused-cwd")
+	write_file(cache .. "/herdr-git-info-focused", "herdrgit1\t150\twZ:p1\t/repo-focused\t1\tfocused-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-focused"),
+		"herdrgit1\t220\t1\t/repo-focused\t1\tfocused-repo\tfeature\td\n"
+	)
+	write_file(cache .. "/herdr-git-info-by-pane/1", "herdrgit1\t230\t1\t/repo-host\t1\thost-repo\tmain\t\n")
+
+	assert_equal(
+		segment_text(render(cache, 240, pane_stub(1, "/repo-host", "herdr"))),
+		"  focused-repo" .. default_separator .. " feature *",
+		"herdr host focused cwd cache"
+	)
+end
+
+local function herdr_host_missing_focused_cache_hides_host_caches()
+	local cache = cache_dir("herdr-host-missing-focused")
+	write_file(cache .. "/herdr-git-info-by-pane/1", "herdrgit1\t210\t1\t/repo-host\t1\thost-repo\tmain\t\n")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-host"),
+		"herdrgit1\t220\t1\t/repo-host\t1\thost-repo\tmain\t\n"
+	)
+
+	assert_equal(
+		segment_text(render(cache, 230, pane_stub(1, "/repo-host", "herdr"))),
+		"",
+		"herdr host missing focused cache"
+	)
+end
+
+local function herdr_host_absent_focused_cache_hides_host_caches()
+	local cache = cache_dir("herdr-host-absent-focused")
+	write_file(cache .. "/herdr-git-info-focused", "herdrgit1\t150\twZ:p1\t/repo-focused\t0\t\t\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/1", "herdrgit1\t210\t1\t/repo-host\t1\thost-repo\tmain\t\n")
+
+	assert_equal(
+		segment_text(render(cache, 230, pane_stub(1, "/repo-host", "herdr"))),
+		"",
+		"herdr host absent focused cache"
+	)
+end
+
+local function ordinary_pane_ignores_focused_cache()
+	local cache = cache_dir("ordinary-focused")
+	write_file(cache .. "/herdr-git-info-focused", "herdrgit1\t150\twZ:p1\t/repo-focused\t1\tfocused-repo\tsqlite\t\n")
+	write_file(cache .. "/herdr-git-info-by-pane/1", "herdrgit1\t210\t1\t/repo-host\t1\thost-repo\tmain\t\n")
+
+	assert_equal(
+		segment_text(render(cache, 230, pane_stub(1, "/repo-host", "/bin/zsh"))),
+		"  host-repo" .. default_separator .. " main",
+		"ordinary pane ignores focused cache"
 	)
 end
 
@@ -970,6 +1044,11 @@ local function run_unit_assertions()
 	current_pane_cache_rejects_payload_id_mismatch()
 	prefers_cwd_cache_when_pane_cache_is_absent()
 	cwd_cache_rejects_payload_cwd_mismatch()
+	herdr_host_prefers_focused_cache_over_host_caches()
+	herdr_host_prefers_newer_focused_cwd_cache()
+	herdr_host_missing_focused_cache_hides_host_caches()
+	herdr_host_absent_focused_cache_hides_host_caches()
+	ordinary_pane_ignores_focused_cache()
 	does_not_use_global_cache_across_windows()
 	exposes_composable_git_segments()
 	renders_detached_rebase_and_pick_flags()
