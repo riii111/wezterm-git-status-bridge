@@ -173,27 +173,14 @@ local function renders_focused_payload()
 	)
 end
 
-local function hides_stale_payload()
-	local cache = cache_dir("stale")
-	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
-
-	assert_equal(segment_text(render(cache, 500, pane_stub("pane1", "/repo"))), "", "stale payload")
-end
-
-local function can_disable_stale_payload_ttl()
-	local cache = cache_dir("stale-disabled")
+local function renders_cached_payload_regardless_of_age()
+	local cache = cache_dir("cached-age")
 	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\trepo\tmain\t\n")
 
 	assert_equal(
-		segment_text(render_with_pane(cache, pane_stub("pane1", "/repo"), {
-			max_age_seconds = false,
-			now = function()
-				return 500
-			end,
-			show_time = false,
-		})),
+		segment_text(render(cache, 500, pane_stub("pane1", "/repo"))),
 		"  repo" .. default_separator .. " main",
-		"stale payload with ttl disabled"
+		"cached payload regardless of age"
 	)
 end
 
@@ -221,7 +208,7 @@ local function prefers_newer_per_pane_cache_over_cwd_cache()
 	)
 end
 
-local function prefers_newer_cwd_cache_over_stale_pane_cache()
+local function prefers_newer_cwd_cache_over_older_pane_cache()
 	local cache = cache_dir("newer-cwd")
 	write_file(
 		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo"),
@@ -318,8 +305,8 @@ local function mismatched_absent_pane_cache_falls_back_to_cwd_cache()
 	)
 end
 
-local function stale_current_pane_cache_falls_back_to_cwd_cache()
-	local cache = cache_dir("current-pane-stale")
+local function older_current_pane_cache_falls_back_to_newer_cwd_cache()
+	local cache = cache_dir("current-pane-older")
 	write_file(
 		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-current"),
 		"herdrgit1\t400\twE:p1\t/repo-current\t1\tcwd-repo\tmain\t\n"
@@ -334,7 +321,7 @@ local function stale_current_pane_cache_falls_back_to_cwd_cache()
 			show_time = false,
 		})),
 		"  cwd-repo" .. default_separator .. " main",
-		"stale current pane fallback"
+		"older current pane fallback"
 	)
 end
 
@@ -970,17 +957,16 @@ end
 
 local function run_unit_assertions()
 	renders_focused_payload()
-	hides_stale_payload()
-	can_disable_stale_payload_ttl()
+	renders_cached_payload_regardless_of_age()
 	ignores_invalid_payloads()
 	prefers_newer_per_pane_cache_over_cwd_cache()
-	prefers_newer_cwd_cache_over_stale_pane_cache()
+	prefers_newer_cwd_cache_over_older_pane_cache()
 	uses_sanitized_per_pane_path()
 	uses_slash_sanitized_per_pane_path()
 	current_pane_cwd_mismatch_falls_back_to_cwd_cache()
 	current_pane_absent_status_hides_cwd_cache()
 	mismatched_absent_pane_cache_falls_back_to_cwd_cache()
-	stale_current_pane_cache_falls_back_to_cwd_cache()
+	older_current_pane_cache_falls_back_to_newer_cwd_cache()
 	current_pane_cache_rejects_payload_id_mismatch()
 	prefers_cwd_cache_when_pane_cache_is_absent()
 	cwd_cache_rejects_payload_cwd_mismatch()
