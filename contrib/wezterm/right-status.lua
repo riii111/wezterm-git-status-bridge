@@ -63,7 +63,6 @@ local function merge_options(options)
 		mode_styles = options.mode_styles,
 		show_git_for_pane = options.show_git_for_pane,
 		on_reload = options.on_reload,
-		pane = options.pane,
 		time_format = options.time_format or DEFAULTS.time_format,
 		repo_prefix = options.repo_prefix or DEFAULTS.repo_prefix,
 		ref_prefix = options.ref_prefix or DEFAULTS.ref_prefix,
@@ -201,8 +200,12 @@ local function refresh(pane, options)
 	end
 
 	local cached = read_cached_pane_info(options, id)
-	local has_external_cached_cwd = cached and cached.cwd ~= "" and (not last or cached.cwd ~= last.cwd)
-	if has_external_cached_cwd and cached.cwd ~= cwd then
+	local cache_written_by_foreign_writer = cached
+		and cached.cwd ~= ""
+		and cached.cwd ~= cwd
+		and last
+		and cached.cwd ~= last.cwd
+	if cache_written_by_foreign_writer then
 		return false
 	end
 
@@ -347,6 +350,11 @@ local function read_current_pane_info(options, pane)
 		return nil, false
 	end
 
+	local cwd = pane_cwd(pane)
+	if cwd and cwd ~= "" and info.cwd ~= "" and info.cwd ~= cwd then
+		return nil, false
+	end
+
 	if info.present then
 		return info, true
 	end
@@ -428,9 +436,12 @@ local function git_segments(options, pane)
 	return segments, info
 end
 
-function M.git_segments(options)
-	options = merge_options(options)
-	return git_segments(options, options.pane)
+function M.git_segments(options, pane)
+	return git_segments(merge_options(options), pane)
+end
+
+function M.cwd_cache_key(cwd)
+	return cwd_cache_key(cwd)
 end
 
 local function time_segments(options)

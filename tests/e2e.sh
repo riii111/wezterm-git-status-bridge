@@ -39,14 +39,12 @@ run_update() {
 	"$bin" update --cache-dir "$cache_path" --pane-id "$update_pane_id" --cwd "$cwd_path"
 	test -f "$cache_path/herdr-git-info-by-pane/$sanitized_update_pane_id"
 	cwd_key=$(
-		"$lua_bin" - "$cwd_path" <<'LUA'
-local cwd = assert(arg[1], "cwd is required")
-local hash = 2166136261
-for index = 1, #cwd do
-	hash = (hash ~ string.byte(cwd, index)) & 0xffffffff
-	hash = (hash * 16777619) & 0xffffffff
+		"$lua_bin" - "$root" "$cwd_path" <<'LUA'
+package.preload["wezterm"] = function()
+	return {}
 end
-io.write(string.format("%08x", hash))
+package.path = arg[1] .. "/contrib/wezterm/?.lua;" .. package.path
+io.write(require("right-status").cwd_cache_key(assert(arg[2])))
 LUA
 	)
 	test -f "$cache_path/herdr-git-info-by-cwd/$cwd_key"
