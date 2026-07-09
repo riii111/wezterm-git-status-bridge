@@ -8,7 +8,6 @@ local DEFAULTS = {
 	separator = "  \u{e0b3}  ",
 	show_time = true,
 	always_show_time_separator = true,
-	max_age_seconds = 300,
 	auto_update = true,
 	update_interval_seconds = 2,
 	update_delay_seconds = 0.2,
@@ -50,7 +49,6 @@ local function merge_options(options)
 				and DEFAULTS.always_show_time_separator
 			or options.always_show_time_separator,
 		cache_dir = options.cache_dir,
-		max_age_seconds = options.max_age_seconds == nil and DEFAULTS.max_age_seconds or options.max_age_seconds,
 		auto_update = options.auto_update == nil and DEFAULTS.auto_update or options.auto_update,
 		update_interval_seconds = options.update_interval_seconds == nil
 				and DEFAULTS.update_interval_seconds
@@ -296,22 +294,12 @@ local function cwd_cache_path(options, cwd)
 	return cache_dir(options) .. "/herdr-git-info-by-cwd/" .. cwd_cache_key(cwd)
 end
 
-local function is_fresh(info, options)
-	if not info then
-		return false
-	end
-	if options.max_age_seconds == false then
-		return true
-	end
-	return options.now() - info.at <= options.max_age_seconds
-end
-
 local function read_cached_pane_info(options, id)
 	if not id or id == "" then
 		return nil
 	end
 	local info = parse_payload(read_line(pane_cache_path(options, id)))
-	if not info or not is_fresh(info, options) or info.herdr_pane_id ~= id then
+	if not info or info.herdr_pane_id ~= id then
 		return nil
 	end
 	return info
@@ -322,7 +310,7 @@ local function read_cached_cwd_info(options, cwd)
 		return nil
 	end
 	local info = parse_payload(read_line(cwd_cache_path(options, cwd)))
-	if not info or not is_fresh(info, options) or info.cwd ~= cwd then
+	if not info or info.cwd ~= cwd then
 		return nil
 	end
 	return info
