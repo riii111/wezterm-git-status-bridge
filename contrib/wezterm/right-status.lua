@@ -63,6 +63,7 @@ local function merge_options(options)
 		mode_styles = options.mode_styles,
 		show_git_for_pane = options.show_git_for_pane,
 		on_reload = options.on_reload,
+		pane = options.pane,
 		time_format = options.time_format or DEFAULTS.time_format,
 		repo_prefix = options.repo_prefix or DEFAULTS.repo_prefix,
 		ref_prefix = options.ref_prefix or DEFAULTS.ref_prefix,
@@ -283,16 +284,25 @@ local function read_line(path)
 	return value
 end
 
-local function focused_cache_path(options)
-	return cache_dir(options) .. "/herdr-git-info"
-end
-
 local function pane_cache_path(options, pane_id)
 	local sanitized = pane_id:gsub("/", "_")
 	if sanitized == "" or sanitized:match("^%.+$") then
 		sanitized = "_"
 	end
 	return cache_dir(options) .. "/herdr-git-info-by-pane/" .. sanitized
+end
+
+local function cwd_cache_key(cwd)
+	local hash = 2166136261
+	for index = 1, #cwd do
+		hash = (hash ~ string.byte(cwd, index)) & 0xffffffff
+		hash = (hash * 16777619) & 0xffffffff
+	end
+	return string.format("%08x", hash)
+end
+
+local function cwd_cache_path(options, cwd)
+	return cache_dir(options) .. "/herdr-git-info-by-cwd/" .. cwd_cache_key(cwd)
 end
 
 local function is_fresh(info, options)
@@ -316,6 +326,17 @@ read_cached_pane_info = function(options, id)
 	return info
 end
 
+local function read_cached_cwd_info(options, cwd)
+	if not cwd or cwd == "" then
+		return nil
+	end
+	local info = parse_payload(read_line(cwd_cache_path(options, cwd)))
+	if not info or not is_fresh(info, options) or info.cwd ~= cwd then
+		return nil
+	end
+	return info
+end
+
 local function read_current_pane_info(options, pane)
 	local id = pane_id(pane)
 	if not id or id == "" then
@@ -332,34 +353,34 @@ local function read_current_pane_info(options, pane)
 	return nil, true
 end
 
+local function read_current_cwd_info(options, pane)
+	local cwd = pane_cwd(pane)
+	if not cwd or cwd == "" then
+		return nil, false
+	end
+	local info = read_cached_cwd_info(options, cwd)
+	if not info then
+		return nil, false
+	end
+
+	if info.present then
+		return info, true
+	end
+	return nil, true
+end
+
 local function read_git_info(options, pane)
-	-- The second return value means the active pane had a fresh cache entry, including a non-Git cwd.
+	-- Prefer the active pane cache; fall back to cwd when pane-id namespaces diverge.
 	local current, has_current_pane_cache = read_current_pane_info(options, pane)
 	if has_current_pane_cache then
 		return current
 	end
 
-	local focused = parse_payload(read_line(focused_cache_path(options)))
-	if not is_fresh(focused, options) then
-		return nil
-	end
-	if focused.herdr_pane_id == "" then
-		if focused.present then
-			return focused
-		end
-		return nil
+	local by_cwd, has_cwd_cache = read_current_cwd_info(options, pane)
+	if has_cwd_cache then
+		return by_cwd
 	end
 
-	local focused_pane = read_cached_pane_info(options, focused.herdr_pane_id)
-	if focused_pane and focused_pane.at >= focused.at then
-		if focused_pane.present then
-			return focused_pane
-		end
-		return nil
-	end
-	if focused.present then
-		return focused
-	end
 	return nil
 end
 
@@ -408,7 +429,8 @@ local function git_segments(options, pane)
 end
 
 function M.git_segments(options)
-	return git_segments(merge_options(options), nil)
+	options = merge_options(options)
+	return git_segments(options, options.pane)
 end
 
 local function time_segments(options)

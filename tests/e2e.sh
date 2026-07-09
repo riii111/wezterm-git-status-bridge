@@ -38,6 +38,18 @@ run_update() {
 	sanitized_update_pane_id=$4
 	"$bin" update --cache-dir "$cache_path" --pane-id "$update_pane_id" --cwd "$cwd_path"
 	test -f "$cache_path/herdr-git-info-by-pane/$sanitized_update_pane_id"
+	cwd_key=$(
+		"$lua_bin" - "$cwd_path" <<'LUA'
+local cwd = assert(arg[1], "cwd is required")
+local hash = 2166136261
+for index = 1, #cwd do
+	hash = (hash ~ string.byte(cwd, index)) & 0xffffffff
+	hash = (hash * 16777619) & 0xffffffff
+end
+io.write(string.format("%08x", hash))
+LUA
+	)
+	test -f "$cache_path/herdr-git-info-by-cwd/$cwd_key"
 }
 
 cache_now() {
@@ -55,6 +67,12 @@ poison_global_cache() {
 		"$tag" "$at" "$cached_pane_id" "$cached_cwd" "$flags" > "$cache_path/herdr-git-info"
 }
 
+remove_pane_cache() {
+	cache_path=$1
+	sanitized_update_pane_id=$2
+	rm -f "$cache_path/herdr-git-info-by-pane/$sanitized_update_pane_id"
+}
+
 clean_repo="$tmp/clean-repo"
 dirty_repo="$tmp/dirty-repo"
 non_repo="$tmp/non-repo"
@@ -62,6 +80,7 @@ clean_cache="$tmp/cache-clean"
 dirty_cache="$tmp/cache-dirty"
 non_repo_cache="$tmp/cache-non-repo"
 plain_cache="$tmp/cache-plain"
+cwd_join_cache="$tmp/cache-cwd-join"
 plugin_cache_home="$tmp/cache-plugin"
 plugin_event_cache_home="$tmp/cache-plugin-event"
 plugin_env_fallback_cache_home="$tmp/cache-plugin-env-fallback"
@@ -82,8 +101,11 @@ run_update "$clean_cache" "$clean_repo" "$pane_id" "$sanitized_pane_id"
 run_update "$dirty_cache" "$dirty_repo" "$pane_id" "$sanitized_pane_id"
 run_update "$non_repo_cache" "$non_repo" "$pane_id" "$sanitized_pane_id"
 run_update "$plain_cache" "$clean_repo" "" "_"
+run_update "$cwd_join_cache" "$clean_repo" "wE:p1" "wE:p1"
 poison_global_cache "$clean_cache"
 poison_global_cache "$dirty_cache"
+poison_global_cache "$cwd_join_cache"
+remove_pane_cache "$cwd_join_cache" "wE:p1"
 
 cat > "$fake_herdr" <<EOF
 #!/usr/bin/env sh
@@ -243,7 +265,8 @@ fi
 grep -q "set WEZTERM_GIT_STATUS_BRIDGE_BIN or install wezterm-git-status-bridge in PATH" "$missing_bin_stderr"
 
 "$lua_bin" "$root/tests/right-status.lua" "$lua_scratch" --e2e \
-	"$clean_cache" "$(cache_now "$clean_cache")" clean-repo main \
-	"$dirty_cache" "$(cache_now "$dirty_cache")" dirty-repo main \
-	"$non_repo_cache" "$(cache_now "$non_repo_cache")" \
-	"$plain_cache" "$(cache_now "$plain_cache")" clean-repo main
+	"$clean_cache" "$(cache_now "$clean_cache")" "$pane_id" "$clean_repo" clean-repo main \
+	"$dirty_cache" "$(cache_now "$dirty_cache")" "$pane_id" "$dirty_repo" dirty-repo main \
+	"$non_repo_cache" "$(cache_now "$non_repo_cache")" "$pane_id" "$non_repo" \
+	"$plain_cache" "$(cache_now "$plain_cache")" "" "$clean_repo" clean-repo main \
+	"$cwd_join_cache" "$(cache_now "$cwd_join_cache")" "0" "$clean_repo" clean-repo main
