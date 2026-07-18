@@ -43,11 +43,39 @@ pub fn write_payload(cache_dir: &Path, payload: &Payload) -> Result<(), CacheErr
 /// Writes the default cache set plus the Herdr-focused cache read by the WezTerm Lua module.
 pub fn write_payload_with_focused(cache_dir: &Path, payload: &Payload) -> Result<(), CacheError> {
     write_payload(cache_dir, payload)?;
+    write_focused_payload(cache_dir, payload)
+}
+
+pub fn write_focused_payload(cache_dir: &Path, payload: &Payload) -> Result<(), CacheError> {
     atomic_write(
         &cache_dir.join("herdr-git-info-focused"),
         &payload.encode_line(),
-    )?;
-    Ok(())
+    )
+    .map_err(Into::into)
+}
+
+pub fn focused_pane_id(cache_dir: &Path) -> Result<Option<String>, CacheError> {
+    let focused_path = cache_dir.join("herdr-git-info-focused");
+    let contents = match fs::read_to_string(focused_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+
+    // The focused cache uses the payload wire format parsed by the WezTerm Lua module.
+    let Some(fields) = contents
+        .lines()
+        .next()
+        .map(|line| line.split('\t').collect::<Vec<_>>())
+    else {
+        return Ok(None);
+    };
+
+    if fields.first() == Some(&"herdrgit1") {
+        Ok(fields.get(2).map(|pane_id| (*pane_id).to_owned()))
+    } else {
+        Ok(None)
+    }
 }
 
 fn atomic_write(path: &Path, contents: &str) -> Result<(), std::io::Error> {
@@ -90,7 +118,7 @@ mod tests {
 
     use crate::payload::Payload;
 
-    use super::{cwd_cache_key, write_payload, write_payload_with_focused};
+    use super::{cwd_cache_key, focused_pane_id, write_payload, write_payload_with_focused};
 
     #[test]
     fn writes_global_per_pane_and_per_cwd_cache_files() {
@@ -161,6 +189,42 @@ mod tests {
         write_payload(temp.path(), &payload).expect("write payload");
 
         assert!(temp.path().join("herdr-git-info-by-pane/_").is_file());
+    }
+
+    #[test]
+    fn reads_focused_pane_id_from_valid_payload() {
+        let temp = TempDir::new().expect("create temp dir");
+        fs::write(
+            temp.path().join("herdr-git-info-focused"),
+            "herdrgit1\t123\tw1:p1\t/repo\t0\t\t\t\n",
+        )
+        .expect("write focused cache");
+
+        assert_eq!(
+            focused_pane_id(temp.path()).expect("read focused pane id"),
+            Some("w1:p1".to_owned())
+        );
+    }
+
+    #[test]
+    fn ignores_missing_or_invalid_focused_payload() {
+        let temp = TempDir::new().expect("create temp dir");
+
+        assert_eq!(
+            focused_pane_id(temp.path()).expect("read missing focused cache"),
+            None
+        );
+
+        fs::write(
+            temp.path().join("herdr-git-info-focused"),
+            "invalid\t123\tw1:p1\t/repo\t0\t\t\t\n",
+        )
+        .expect("write invalid focused cache");
+
+        assert_eq!(
+            focused_pane_id(temp.path()).expect("read invalid focused cache"),
+            None
+        );
     }
 
     #[test]

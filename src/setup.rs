@@ -487,7 +487,7 @@ fn upsert_zsh_hook(path: &Path, binary_path: &Path) -> Result<(), SetupError> {
 fn zsh_hook_block(binary_path: &Path) -> String {
     let binary = shell_single_quote(&binary_path.to_string_lossy());
     format!(
-        "{SHELL_BEGIN}\n_wezterm_git_status_bridge_update() {{\n  {binary} update --pane-id \"${{WEZTERM_PANE:-shell}}\" --cwd \"$PWD\" >/dev/null 2>&1 &!\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _wezterm_git_status_bridge_update\nadd-zsh-hook precmd _wezterm_git_status_bridge_update\n{SHELL_END}"
+        "{SHELL_BEGIN}\n_wezterm_git_status_bridge_update() {{\n  {binary} update --pane-id \"${{HERDR_PANE_ID:-${{WEZTERM_PANE:-shell}}}}\" --cwd \"$PWD\" >/dev/null 2>&1 &!\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _wezterm_git_status_bridge_update\nadd-zsh-hook precmd _wezterm_git_status_bridge_update\n{SHELL_END}"
     )
 }
 
@@ -581,6 +581,8 @@ mod tests {
         assert!(content.contains("add-zsh-hook chpwd"));
         assert!(content.contains("add-zsh-hook precmd"));
         assert!(content.contains("--cwd \"$PWD\""));
+        assert!(content.contains("HERDR_PANE_ID:-"));
+        assert!(content.contains("WEZTERM_PANE:-shell"));
         assert!(!content.contains("pane list"));
         assert!(!content.contains("--event-json"));
     }
