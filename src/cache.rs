@@ -1,7 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt as _;
 use thiserror::Error;
 
 use crate::payload::Payload;
@@ -112,7 +111,7 @@ impl FocusedCacheLock {
             .truncate(false)
             .write(true)
             .open(cache_dir.join("herdr-git-info-focused.lock"))?;
-        lock.lock_exclusive()?;
+        lock.lock()?;
         Ok(Self(lock))
     }
 }
