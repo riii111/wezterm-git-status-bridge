@@ -117,9 +117,7 @@ fn update(args: UpdateArgs) -> Result<(), CliError> {
     match resolved.cache_write {
         CacheWrite::Default => {
             cache::write_payload(&cache_dir, &payload)?;
-            if cache::focused_pane_id(&cache_dir)?.as_deref() == Some(payload.pane_id.as_str()) {
-                cache::write_focused_payload(&cache_dir, &payload)?;
-            }
+            cache::refresh_focused_payload_if_matching(&cache_dir, &payload)?;
         }
         CacheWrite::HerdrFocused => cache::write_payload_with_focused(&cache_dir, &payload)?,
     }

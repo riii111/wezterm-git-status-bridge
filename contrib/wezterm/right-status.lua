@@ -252,11 +252,15 @@ local function parse_payload(value)
 	end
 
 	local fields = split_tabs(value)
-	if fields[1] ~= "herdrgit1" then
+	if #fields < 8 or fields[1] ~= "herdrgit1" or not fields[2]:match("^%d+$") then
 		return nil
 	end
 
 	local at = tonumber(fields[2])
+	if not at or (fields[5] ~= "0" and fields[5] ~= "1") then
+		return nil
+	end
+
 	local present = fields[5] == "1"
 	local info = {
 		at = at,
@@ -268,9 +272,6 @@ local function parse_payload(value)
 		flags = fields[8] or "",
 	}
 
-	if not at then
-		return nil
-	end
 	if present and (not info.repo or info.repo == "" or not info.ref or info.ref == "") then
 		return nil
 	end

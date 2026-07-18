@@ -194,6 +194,10 @@ local function ignores_invalid_payloads()
 	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "invalid tag")
 	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\t/repo\t1\t\tmain\t\n")
 	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "missing repo")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\tnot-a-timestamp\tpane1\t/repo\t0\t\t\t\n")
+	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "invalid timestamp")
+	write_file(cache .. "/herdr-git-info-by-pane/pane1", "herdrgit1\t100\tpane1\n")
+	assert_equal(segment_text(render(cache, 120, pane_stub("pane1", "/repo"))), "", "missing fields")
 end
 
 local function prefers_newer_per_pane_cache_over_cwd_cache()
