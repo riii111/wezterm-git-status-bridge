@@ -132,6 +132,14 @@ test "$present" = "1"
 test "$repo" = "clean-repo"
 test "$ref" = "main"
 
+"$bin" update --cache-dir "$plugin_cache" --pane-id "window/9:pane/3" --cwd "$dirty_repo"
+IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$plugin_cache/herdr-git-info-focused"
+test "$tag" = "herdrgit1"
+test "$cached_pane_id" = "window/9:pane/3"
+test "$cached_cwd" = "$dirty_repo"
+test "$present" = "1"
+test "$repo" = "dirty-repo"
+
 HERDR_PLUGIN_EVENT_JSON='{"event":"pane.focused"}' \
 	WEZTERM_GIT_STATUS_BRIDGE_BIN="$bin" \
 	HERDR_BIN_PATH="$fake_herdr" \
@@ -224,25 +232,42 @@ grep -q -- '--cwd "$PWD"' "$setup_zshrc"
 if grep -q -- 'pane list' "$setup_zshrc"; then
 	exit 1
 fi
+setup_hook_cache="$setup_hook_cache_home/wezterm"
 (
 	cd "$dirty_repo"
-	env XDG_CACHE_HOME="$setup_hook_cache_home" WEZTERM_PANE="window/5:pane/6" zsh -fc ". '$setup_zshrc'; _wezterm_git_status_bridge_update"
+	env XDG_CACHE_HOME="$setup_hook_cache_home" HERDR_PANE_ID="w1:p1" WEZTERM_PANE="window/5:pane/6" zsh -fc ". '$setup_zshrc'; _wezterm_git_status_bridge_update"
 )
-
-setup_hook_cache="$setup_hook_cache_home/wezterm"
 count=0
 while [ ! -f "$setup_hook_cache/herdr-git-info" ] && [ "$count" -lt 50 ]; do
 	count=$((count + 1))
 	sleep 0.1
 done
 test -f "$setup_hook_cache/herdr-git-info"
+test ! -e "$setup_hook_cache/herdr-git-info-focused"
+
+"$bin" update --cache-dir "$setup_hook_cache" --event-json "{\"pane\":{\"pane_id\":\"w1:p1\",\"cwd\":\"$clean_repo\"}}"
+(
+	cd "$dirty_repo"
+	env XDG_CACHE_HOME="$setup_hook_cache_home" HERDR_PANE_ID="w1:p1" WEZTERM_PANE="window/5:pane/6" zsh -fc ". '$setup_zshrc'; _wezterm_git_status_bridge_update"
+)
+count=0
+while { [ ! -f "$setup_hook_cache/herdr-git-info-focused" ] || ! grep -F -- "$dirty_repo" "$setup_hook_cache/herdr-git-info-focused" >/dev/null; } && [ "$count" -lt 50 ]; do
+	count=$((count + 1))
+	sleep 0.1
+done
 IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$setup_hook_cache/herdr-git-info"
 test "$tag" = "herdrgit1"
-test "$cached_pane_id" = "window/5:pane/6"
+test "$cached_pane_id" = "w1:p1"
 test "$cached_cwd" = "$dirty_repo"
 test "$present" = "1"
 test "$repo" = "dirty-repo"
-test ! -e "$setup_hook_cache/herdr-git-info-focused"
+test -f "$setup_hook_cache/herdr-git-info-focused"
+IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$setup_hook_cache/herdr-git-info-focused"
+test "$tag" = "herdrgit1"
+test "$cached_pane_id" = "w1:p1"
+test "$cached_cwd" = "$dirty_repo"
+test "$present" = "1"
+test "$repo" = "dirty-repo"
 
 cat > "$fake_herdr" <<'EOF'
 #!/usr/bin/env sh

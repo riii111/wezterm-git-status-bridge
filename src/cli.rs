@@ -115,7 +115,10 @@ fn update(args: UpdateArgs) -> Result<(), CliError> {
 
     let cache_dir = args.cache_dir.unwrap_or_else(cache::default_cache_dir);
     match resolved.cache_write {
-        CacheWrite::Default => cache::write_payload(&cache_dir, &payload)?,
+        CacheWrite::Default => {
+            cache::write_payload(&cache_dir, &payload)?;
+            cache::refresh_focused_payload_if_matching(&cache_dir, &payload)?;
+        }
         CacheWrite::HerdrFocused => cache::write_payload_with_focused(&cache_dir, &payload)?,
     }
     Ok(())
@@ -244,6 +247,68 @@ mod tests {
         assert!(focused.contains("\tw1:p1\t"));
         assert!(focused.contains("\t1\t"));
         assert!(focused.contains("\tmain\t"));
+    }
+
+    #[test]
+    fn explicit_update_refreshes_focused_for_matching_pane() {
+        let cache = TempDir::new().expect("create cache dir");
+        let focused_repo = git_repo();
+        let updated_repo = git_repo();
+
+        update(UpdateArgs {
+            cache_dir: Some(cache.path().to_path_buf()),
+            event_json: Some(format!(
+                r#"{{"pane":{{"pane_id":"w1:p1","cwd":"{}"}}}}"#,
+                focused_repo.path().display()
+            )),
+            ..UpdateArgs::default()
+        })
+        .expect("write focused cache");
+
+        update(UpdateArgs {
+            cache_dir: Some(cache.path().to_path_buf()),
+            pane_id: Some("w1:p1".to_owned()),
+            cwd: Some(updated_repo.path().to_path_buf()),
+            ..UpdateArgs::default()
+        })
+        .expect("refresh focused cache");
+
+        let focused = fs::read_to_string(cache.path().join("herdr-git-info-focused"))
+            .expect("read focused cache");
+        assert!(focused.contains(&format!("\t{}\t", updated_repo.path().display())));
+    }
+
+    #[test]
+    fn explicit_update_keeps_focused_for_other_pane() {
+        let cache = TempDir::new().expect("create cache dir");
+        let focused_repo = git_repo();
+        let updated_repo = git_repo();
+
+        update(UpdateArgs {
+            cache_dir: Some(cache.path().to_path_buf()),
+            event_json: Some(format!(
+                r#"{{"pane":{{"pane_id":"w1:p1","cwd":"{}"}}}}"#,
+                focused_repo.path().display()
+            )),
+            ..UpdateArgs::default()
+        })
+        .expect("write focused cache");
+        let before = fs::read_to_string(cache.path().join("herdr-git-info-focused"))
+            .expect("read focused cache");
+
+        update(UpdateArgs {
+            cache_dir: Some(cache.path().to_path_buf()),
+            pane_id: Some("w1:p2".to_owned()),
+            cwd: Some(updated_repo.path().to_path_buf()),
+            ..UpdateArgs::default()
+        })
+        .expect("update other pane");
+
+        assert_eq!(
+            fs::read_to_string(cache.path().join("herdr-git-info-focused"))
+                .expect("read focused cache"),
+            before
+        );
     }
 
     #[test]
