@@ -232,19 +232,29 @@ grep -q -- '--cwd "$PWD"' "$setup_zshrc"
 if grep -q -- 'pane list' "$setup_zshrc"; then
 	exit 1
 fi
+setup_hook_cache="$setup_hook_cache_home/wezterm"
 (
 	cd "$dirty_repo"
-	"$bin" update --cache-dir "$setup_hook_cache_home/wezterm" --event-json "{\"pane\":{\"pane_id\":\"w1:p1\",\"cwd\":\"$clean_repo\"}}"
 	env XDG_CACHE_HOME="$setup_hook_cache_home" HERDR_PANE_ID="w1:p1" WEZTERM_PANE="window/5:pane/6" zsh -fc ". '$setup_zshrc'; _wezterm_git_status_bridge_update"
 )
+count=0
+while [ ! -f "$setup_hook_cache/herdr-git-info" ] && [ "$count" -lt 50 ]; do
+	count=$((count + 1))
+	sleep 0.1
+done
+test -f "$setup_hook_cache/herdr-git-info"
+test ! -e "$setup_hook_cache/herdr-git-info-focused"
 
-setup_hook_cache="$setup_hook_cache_home/wezterm"
+"$bin" update --cache-dir "$setup_hook_cache" --event-json "{\"pane\":{\"pane_id\":\"w1:p1\",\"cwd\":\"$clean_repo\"}}"
+(
+	cd "$dirty_repo"
+	env XDG_CACHE_HOME="$setup_hook_cache_home" HERDR_PANE_ID="w1:p1" WEZTERM_PANE="window/5:pane/6" zsh -fc ". '$setup_zshrc'; _wezterm_git_status_bridge_update"
+)
 count=0
 while { [ ! -f "$setup_hook_cache/herdr-git-info-focused" ] || ! grep -F -- "$dirty_repo" "$setup_hook_cache/herdr-git-info-focused" >/dev/null; } && [ "$count" -lt 50 ]; do
 	count=$((count + 1))
 	sleep 0.1
 done
-test -f "$setup_hook_cache/herdr-git-info"
 IFS='	' read -r tag at cached_pane_id cached_cwd present repo ref flags < "$setup_hook_cache/herdr-git-info"
 test "$tag" = "herdrgit1"
 test "$cached_pane_id" = "w1:p1"

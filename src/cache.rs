@@ -110,6 +110,7 @@ impl FocusedCacheLock {
             .create(true)
             .truncate(false)
             .write(true)
+            // The file remains, but its advisory lock releases when this handle drops.
             .open(cache_dir.join("herdr-git-info-focused.lock"))?;
         lock.lock()?;
         Ok(Self(lock))
