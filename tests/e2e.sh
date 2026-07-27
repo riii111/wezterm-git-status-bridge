@@ -176,6 +176,12 @@ test "$cached_pane_id" = "window/7:pane/8"
 test "$cached_cwd" = "$clean_repo"
 test "$present" = "1"
 
+test "$(grep -c '^\[\[events\]\]$' "$root/contrib/herdr-plugin/herdr-plugin.toml")" = "1"
+grep -q '^on = "pane.focused"$' "$root/contrib/herdr-plugin/herdr-plugin.toml"
+if grep -q '^on = "workspace.focused"$' "$root/contrib/herdr-plugin/herdr-plugin.toml"; then
+	exit 1
+fi
+
 cat > "$fake_herdr" <<EOF
 #!/usr/bin/env sh
 if [ "\$1" = "plugin" ] && [ "\$2" = "link" ]; then
