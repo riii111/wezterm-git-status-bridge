@@ -1,6 +1,6 @@
 [package]
 name = "wezterm-git-status-bridge"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 rust-version = "1.96"
 description = "Bridge Git repository status into WezTerm status rendering"
