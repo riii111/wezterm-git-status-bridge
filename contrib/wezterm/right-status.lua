@@ -79,6 +79,24 @@ local function decode_percent(value)
 	end)
 end
 
+local function normalize_local_path(path)
+	if type(path) ~= "string" or path == "" then
+		return path
+	end
+	if path:match("^/+$") then
+		return "/"
+	end
+
+	local drive, separator = path:match("^(%a:)([/\\])[/\\]*$")
+	if drive then
+		return drive .. separator
+	end
+	if path:match("^%a:[/\\]") or path:match("^\\\\") then
+		return (path:gsub("[/\\]+$", ""))
+	end
+	return (path:gsub("/+$", ""))
+end
+
 local function wezterm_hostname()
 	if not wezterm.hostname then
 		return nil
@@ -124,9 +142,9 @@ local function cwd_path(cwd)
 	end
 	if type(cwd) == "string" then
 		if cwd:match("^file://") then
-			return decode_uri_path(cwd)
+			return normalize_local_path(decode_uri_path(cwd))
 		end
-		return cwd
+		return normalize_local_path(cwd)
 	end
 	if cwd.scheme and cwd.scheme ~= "file" then
 		return nil
@@ -141,13 +159,13 @@ local function cwd_path(cwd)
 				return cwd:file_path()
 			end)
 			if ok then
-				return value
+				return normalize_local_path(value)
 			end
 		elseif type(file_path) == "string" then
-			return file_path
+			return normalize_local_path(file_path)
 		end
 	end
-	return cwd.path and decode_uri_path(cwd.path) or nil
+	return cwd.path and normalize_local_path(decode_uri_path(cwd.path)) or nil
 end
 
 local function pane_cwd(pane)
