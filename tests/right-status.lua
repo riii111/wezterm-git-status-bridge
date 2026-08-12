@@ -371,6 +371,48 @@ local function prefers_cwd_cache_when_pane_cache_is_absent()
 	)
 end
 
+local function nightly_url_trailing_slash_uses_cwd_cache()
+	local cache = cache_dir("nightly-url-trailing-slash")
+	write_file(
+		cache .. "/herdr-git-info-by-cwd/" .. right_status.cwd_cache_key("/repo-cwd"),
+		"herdrgit1\t210\twE:p1\t/repo-cwd\t1\tcwd-repo\tfeature\t\n"
+	)
+	local cwd = {
+		scheme = "file",
+		file_path = function()
+			return "/repo-cwd/"
+		end,
+	}
+
+	assert_equal(
+		segment_text(render(cache, 220, pane_stub(0, cwd))),
+		"  cwd-repo" .. default_separator .. " feature",
+		"nightly url trailing slash cwd cache"
+	)
+end
+
+local function trailing_slash_matches_pane_cache_cwd()
+	local cache = cache_dir("pane-trailing-slash")
+	write_file(cache .. "/herdr-git-info-by-pane/55", "herdrgit1\t210\t55\t/repo-current\t1\tcurrent-repo\tfeature\t\n")
+
+	assert_equal(
+		segment_text(render(cache, 220, pane_stub(55, "file:///repo-current/"))),
+		"  current-repo" .. default_separator .. " feature",
+		"trailing slash pane cache cwd"
+	)
+end
+
+local function root_cwd_is_preserved()
+	local cache = cache_dir("root-cwd")
+	write_file(cache .. "/herdr-git-info-by-pane/60", "herdrgit1\t210\t60\t/\t1\troot-repo\tmain\t\n")
+
+	assert_equal(
+		segment_text(render(cache, 220, pane_stub(60, "file:///"))),
+		"  root-repo" .. default_separator .. " main",
+		"root cwd"
+	)
+end
+
 local function cwd_cache_rejects_payload_cwd_mismatch()
 	local cache = cache_dir("cwd-mismatch")
 	write_file(
@@ -958,6 +1000,36 @@ local function refresh_rejects_remote_cwd()
 	assert_equal(_G.wezterm_background_processes[4][6], "/repo three", "local short decoded cwd")
 end
 
+local function refresh_normalizes_local_cwd_representations()
+	_G.wezterm_background_processes = {}
+	local cache = cache_dir("normalize-local-cwd")
+	local cwd_cases = {
+		{ "/repo/", "/repo" },
+		{ "/repo", "/repo" },
+		{ "file:///repo/", "/repo" },
+		{ { scheme = "file", file_path = "/repo/" }, "/repo" },
+		{ {
+			scheme = "file",
+			file_path = function()
+				return "/repo/"
+			end,
+		}, "/repo" },
+		{ { scheme = "file", path = "/repo/" }, "/repo" },
+		{ "file:///", "/" },
+		{ "C:\\repo\\", "C:\\repo" },
+		{ "C:\\", "C:\\" },
+	}
+
+	for index, cwd_case in ipairs(cwd_cases) do
+		assert_equal(
+			right_status.refresh(pane_stub(60 + index, cwd_case[1]), { cache_dir = cache }),
+			true,
+			"normalized local cwd refresh " .. index
+		)
+		assert_equal(_G.wezterm_background_processes[index][6], cwd_case[2], "normalized local cwd " .. index)
+	end
+end
+
 local function render_event_uses_active_pane_fallback()
 	_G.wezterm_handlers = {}
 	_G.wezterm_background_processes = {}
@@ -1047,6 +1119,9 @@ local function run_unit_assertions()
 	older_current_pane_cache_falls_back_to_newer_cwd_cache()
 	current_pane_cache_rejects_payload_id_mismatch()
 	prefers_cwd_cache_when_pane_cache_is_absent()
+	nightly_url_trailing_slash_uses_cwd_cache()
+	trailing_slash_matches_pane_cache_cwd()
+	root_cwd_is_preserved()
 	cwd_cache_rejects_payload_cwd_mismatch()
 	herdr_host_prefers_focused_cache_over_host_caches()
 	herdr_host_prefers_newer_focused_cwd_cache()
@@ -1071,6 +1146,7 @@ local function run_unit_assertions()
 	refresh_allows_cwd_change_from_cached_cwd()
 	refresh_without_background_api_does_not_throttle()
 	refresh_rejects_remote_cwd()
+	refresh_normalizes_local_cwd_representations()
 	render_event_uses_active_pane_fallback()
 end
 
