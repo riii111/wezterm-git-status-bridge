@@ -58,7 +58,7 @@ wezterm-git-status-bridge setup --herdr
 wezterm-git-status-bridge setup --kitty --herdr
 ```
 
-WezTerm setup writes the Lua module and updates `wezterm.lua`. Kitty setup writes `tab_bar.py`, enables the custom tab bar, keeps it visible for one tab, and installs a zsh `chpwd` / `precmd` hook. `--herdr` also links the Herdr plugin.
+WezTerm setup writes the Lua module and updates `wezterm.lua`. Kitty setup writes a managed `tab_bar.py`, enables the custom tab bar without changing the title template, keeps it visible for one tab, and installs a zsh `chpwd` / `precmd` hook. It refuses to replace an existing unmanaged `tab_bar.py`. `--herdr` also links the Herdr plugin.
 
 Kitty redraws the tab bar on a timer, but only reads one-line cache files there. Git commands remain in the background shell hook. `KITTY_WINDOW_ID` keeps per-window writes separate while the cwd cache joins equivalent terminal contexts.
 

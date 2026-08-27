@@ -45,6 +45,14 @@ class FakeTabAccessor:
 
 TabBarData = namedtuple("TabBarData", "tab_id is_active")
 ExtraData = namedtuple("ExtraData", "for_layout")
+timer_ids: list[int] = []
+removed_timer_ids: list[int] = []
+
+
+def add_timer_stub(*_args) -> int:
+    timer_id = len(timer_ids) + 1
+    timer_ids.append(timer_id)
+    return timer_id
 
 
 def install_kitty_stubs() -> None:
@@ -54,7 +62,8 @@ def install_kitty_stubs() -> None:
 
     fast_data_types = types.ModuleType("kitty.fast_data_types")
     fast_data_types.Screen = FakeScreen
-    fast_data_types.add_timer = lambda *_args: 1
+    fast_data_types.add_timer = add_timer_stub
+    fast_data_types.remove_timer = removed_timer_ids.append
     fast_data_types.wcswidth = len
 
     rgb = types.ModuleType("kitty.rgb")
@@ -83,12 +92,17 @@ def install_kitty_stubs() -> None:
     )
 
 
+def load_status_bar(name: str):
+    spec = importlib.util.spec_from_file_location(name, MODULE_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 install_kitty_stubs()
-spec = importlib.util.spec_from_file_location("kitty_status_bar", MODULE_PATH)
-assert spec and spec.loader
-status_bar = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = status_bar
-spec.loader.exec_module(status_bar)
+status_bar = load_status_bar("kitty_status_bar")
 
 
 class KittyStatusBarTest(unittest.TestCase):
@@ -160,13 +174,6 @@ class KittyStatusBarTest(unittest.TestCase):
             self.assertEqual(info.ref, "feature")
             self.assertEqual(info.flags, "d")
 
-    def test_draw_title_preserves_existing_dotfiles_behavior(self) -> None:
-        tab = types.SimpleNamespace(active_exe="/bin/zsh", active_wd="/repo/project")
-        title = status_bar.draw_title(
-            {"tab": tab, "title": "fallback", "max_title_length": 24}
-        )
-        self.assertEqual(title, " project ")
-
     def test_formats_time_with_english_names(self) -> None:
         value = status_bar._format_time(datetime(2026, 8, 27, 9, 5))
         self.assertEqual(value, "Thu Aug 27 09:05")
@@ -190,6 +197,26 @@ class KittyStatusBarTest(unittest.TestCase):
         with patch.object(status_bar, "_time_cells", return_value=time_cells):
             cells = status_bar._fit_cells(info, 7)
         self.assertEqual(cells, time_cells)
+
+    def test_reload_replaces_existing_redraw_timer(self) -> None:
+        timer_ids.clear()
+        removed_timer_ids.clear()
+        kitty_tab_bar = sys.modules["kitty.tab_bar"]
+        attribute = status_bar.TIMER_ID_ATTRIBUTE
+        if hasattr(kitty_tab_bar, attribute):
+            delattr(kitty_tab_bar, attribute)
+
+        status_bar._ensure_redraw_timer()
+        self.assertEqual(timer_ids, [1])
+
+        reloaded = load_status_bar("kitty_status_bar_reloaded")
+        self.assertEqual(removed_timer_ids, [1])
+        reloaded._ensure_redraw_timer()
+        self.assertEqual(timer_ids, [1, 2])
+        self.assertEqual(getattr(kitty_tab_bar, attribute), 2)
+
+        reloaded._remove_previous_redraw_timer()
+        self.assertEqual(removed_timer_ids, [1, 2])
 
 
 if __name__ == "__main__":

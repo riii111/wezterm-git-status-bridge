@@ -1,3 +1,4 @@
+# wezterm-git-status-bridge managed kitty adapter
 from __future__ import annotations
 
 import os
@@ -5,8 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+import kitty.tab_bar as kitty_tab_bar
 from kitty.boss import get_boss
-from kitty.fast_data_types import Screen, add_timer, wcswidth
+from kitty.fast_data_types import Screen, add_timer, remove_timer, wcswidth
 from kitty.rgb import to_color
 from kitty.tab_bar import (
     DrawData,
@@ -19,9 +21,9 @@ from kitty.tab_bar import (
 from kitty.utils import color_as_int
 
 
-SHELLS = {"bash", "dash", "fish", "nu", "sh", "zsh"}
 HERDR_PROCESS = "herdr"
 REFRESH_SECONDS = 1.0
+TIMER_ID_ATTRIBUTE = "_wezterm_git_status_bridge_timer_id"
 
 STATUS_BG = "#1f1f28"
 MUTED = "#565f89"
@@ -62,34 +64,10 @@ class GitInfo(NamedTuple):
 
 
 _active_tab: TabBarData | None = None
-_redraw_timer_started = False
 
 
 def _rgb(value: str) -> int:
     return as_rgb(color_as_int(to_color(value)))
-
-
-def _working_directory_name(path: str) -> str:
-    working_directory = Path(path)
-    if working_directory == Path.home():
-        return "~"
-    return working_directory.name or "/"
-
-
-def draw_title(data: dict) -> str:
-    tab = data["tab"]
-    executable = Path(tab.active_exe or "").name
-
-    if executable in SHELLS and tab.active_wd:
-        title = _working_directory_name(tab.active_wd)
-    else:
-        title = executable or data["title"]
-
-    max_length = max(data["max_title_length"] - 2, 1)
-    if len(title) > max_length:
-        title = title[: max_length - 1] + "…"
-
-    return f" {title} "
 
 
 def _cache_dir() -> Path:
@@ -239,11 +217,20 @@ def _redraw_tab_bars(_timer_id: int) -> None:
         tab_manager.mark_tab_bar_dirty()
 
 
+def _remove_previous_redraw_timer() -> None:
+    timer_id = getattr(kitty_tab_bar, TIMER_ID_ATTRIBUTE, None)
+    if timer_id is not None:
+        remove_timer(timer_id)
+        delattr(kitty_tab_bar, TIMER_ID_ATTRIBUTE)
+
+
 def _ensure_redraw_timer() -> None:
-    global _redraw_timer_started
-    if not _redraw_timer_started:
-        add_timer(_redraw_tab_bars, REFRESH_SECONDS, True)
-        _redraw_timer_started = True
+    if getattr(kitty_tab_bar, TIMER_ID_ATTRIBUTE, None) is None:
+        timer_id = add_timer(_redraw_tab_bars, REFRESH_SECONDS, True)
+        setattr(kitty_tab_bar, TIMER_ID_ATTRIBUTE, timer_id)
+
+
+_remove_previous_redraw_timer()
 
 
 def draw_tab(

@@ -17,6 +17,7 @@ const SETUP_BEGIN: &str = "-- wezterm-git-status-bridge setup begin";
 const SETUP_END: &str = "-- wezterm-git-status-bridge setup end";
 const KITTY_BEGIN: &str = "# wezterm-git-status-bridge kitty setup begin";
 const KITTY_END: &str = "# wezterm-git-status-bridge kitty setup end";
+const KITTY_ADAPTER_MARKER: &str = "# wezterm-git-status-bridge managed kitty adapter";
 const SHELL_BEGIN: &str = "# wezterm-git-status-bridge setup begin";
 const SHELL_END: &str = "# wezterm-git-status-bridge setup end";
 
@@ -32,6 +33,8 @@ pub enum SetupError {
     Read { path: PathBuf, source: io::Error },
     #[error("failed to write {path}: {source}")]
     Write { path: PathBuf, source: io::Error },
+    #[error("refusing to overwrite unmanaged Kitty adapter at {0}")]
+    UnmanagedKittyAdapter(PathBuf),
     #[error("failed to mark {path} executable: {source}")]
     Permissions { path: PathBuf, source: io::Error },
     #[error("failed to link Herdr plugin: {0}")]
@@ -71,7 +74,7 @@ pub fn run(args: &SetupArgs) -> Result<(), SetupError> {
     }
     if install_kitty {
         create_dir(&kitty_dir)?;
-        write_file(&kitty_dir.join("tab_bar.py"), KITTY_TAB_BAR_PY)?;
+        write_kitty_adapter(&kitty_dir.join("tab_bar.py"))?;
     }
 
     if args.herdr {
@@ -160,6 +163,15 @@ fn write_file(path: &Path, value: &str) -> Result<(), SetupError> {
     })
 }
 
+fn write_kitty_adapter(path: &Path) -> Result<(), SetupError> {
+    if read_optional(path)?
+        .is_some_and(|current| current.lines().next() != Some(KITTY_ADAPTER_MARKER))
+    {
+        return Err(SetupError::UnmanagedKittyAdapter(path.to_path_buf()));
+    }
+    write_file(path, KITTY_TAB_BAR_PY)
+}
+
 fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result<(), SetupError> {
     let current = read_optional(path)?;
     let block = current
@@ -178,9 +190,7 @@ fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result
 }
 
 fn upsert_kitty_config(path: &Path) -> Result<(), SetupError> {
-    let block = format!(
-        "{KITTY_BEGIN}\ntab_bar_style custom\ntab_bar_min_tabs 1\ntab_title_template \"{{custom}}\"\n{KITTY_END}"
-    );
+    let block = format!("{KITTY_BEGIN}\ntab_bar_style custom\ntab_bar_min_tabs 1\n{KITTY_END}");
     let next = read_optional(path)?.map_or_else(
         || format!("{block}\n"),
         |current| {
@@ -562,7 +572,10 @@ mod tests {
 
     use crate::cli::{SetupArgs, TerminalArgs};
 
-    use super::{KITTY_BEGIN, SETUP_BEGIN, SETUP_END, SHELL_BEGIN, append_block, upsert_lua_block};
+    use super::{
+        KITTY_ADAPTER_MARKER, KITTY_BEGIN, SETUP_BEGIN, SETUP_END, SHELL_BEGIN, SetupError,
+        append_block, upsert_lua_block,
+    };
 
     #[test]
     fn inserts_lua_block_before_return() {
@@ -643,7 +656,11 @@ mod tests {
         let kitty_file = kitty_dir.join("kitty.conf");
         let wezterm_dir = temp.path().join("wezterm");
         std::fs::create_dir_all(&kitty_dir).expect("create kitty config dir");
-        std::fs::write(&kitty_file, "font_size 14\n").expect("write kitty config");
+        std::fs::write(
+            &kitty_file,
+            "font_size 14\ntab_title_template \"{title}\"\n",
+        )
+        .expect("write kitty config");
 
         let args = SetupArgs {
             terminal: TerminalArgs {
@@ -659,14 +676,51 @@ mod tests {
         super::run(&args).expect("run kitty setup");
         super::run(&args).expect("rerun kitty setup");
 
-        assert!(kitty_dir.join("tab_bar.py").is_file());
+        let adapter =
+            std::fs::read_to_string(kitty_dir.join("tab_bar.py")).expect("read kitty adapter");
+        assert_eq!(adapter.lines().next(), Some(KITTY_ADAPTER_MARKER));
         assert!(!wezterm_dir.join("right-status.lua").exists());
         let config = std::fs::read_to_string(kitty_file).expect("read kitty config");
         assert!(config.starts_with("font_size 14\n"));
         assert!(config.contains("tab_bar_style custom"));
         assert!(config.contains("tab_bar_min_tabs 1"));
-        assert!(config.contains("tab_title_template \"{custom}\""));
+        assert!(config.contains("tab_title_template \"{title}\""));
+        assert!(!config.contains("tab_title_template \"{custom}\""));
         assert_eq!(config.matches(KITTY_BEGIN).count(), 1);
+    }
+
+    #[test]
+    fn setup_preserves_unmanaged_kitty_adapter() {
+        let temp = TempDir::new().expect("create temp dir");
+        let kitty_dir = temp.path().join("kitty");
+        let kitty_file = kitty_dir.join("kitty.conf");
+        let adapter_file = kitty_dir.join("tab_bar.py");
+        std::fs::create_dir_all(&kitty_dir).expect("create kitty config dir");
+        std::fs::write(&kitty_file, "font_size 14\n").expect("write kitty config");
+        std::fs::write(&adapter_file, "def draw_tab():\n    pass\n")
+            .expect("write existing adapter");
+
+        let error = super::run(&SetupArgs {
+            terminal: TerminalArgs {
+                kitty: true,
+                ..TerminalArgs::default()
+            },
+            kitty_config_dir: Some(kitty_dir),
+            kitty_config_file: Some(kitty_file.clone()),
+            no_shell_hook: true,
+            ..SetupArgs::default()
+        })
+        .expect_err("reject unmanaged Kitty adapter");
+
+        assert!(matches!(error, SetupError::UnmanagedKittyAdapter(path) if path == adapter_file));
+        assert_eq!(
+            std::fs::read_to_string(&adapter_file).expect("read existing adapter"),
+            "def draw_tab():\n    pass\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(kitty_file).expect("read kitty config"),
+            "font_size 14\n"
+        );
     }
 
     #[test]

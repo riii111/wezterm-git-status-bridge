@@ -285,6 +285,9 @@ test -f "$setup_kitty_dir/tab_bar.py"
 grep -q -- '^font_size 14$' "$setup_kitty_dir/kitty.conf"
 grep -q -- '^tab_bar_style custom$' "$setup_kitty_dir/kitty.conf"
 grep -q -- '^tab_bar_min_tabs 1$' "$setup_kitty_dir/kitty.conf"
+if grep -q -- '^tab_title_template ' "$setup_kitty_dir/kitty.conf"; then
+	exit 1
+fi
 
 (
 	cd "$clean_repo"
