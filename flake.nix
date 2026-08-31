@@ -1,5 +1,5 @@
 {
-  description = "wezterm-git-status-bridge development and build environment";
+  description = "Terminal Git status bridge development and build environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -62,7 +62,7 @@
             ];
 
             meta = {
-              description = "Bridge Git repository status into WezTerm status rendering";
+              description = "Bridge Git repository status into terminal status rendering";
               homepage = "https://github.com/riii111/wezterm-git-status-bridge";
               license = pkgs.lib.licenses.mit;
               mainProgram = "wezterm-git-status-bridge";
@@ -89,6 +89,7 @@
               pkgs.cargo-machete
               pkgs.lefthook
               pkgs.lua5_4
+              pkgs.python3
             ];
           };
         }
