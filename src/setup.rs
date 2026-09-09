@@ -9,11 +9,15 @@ use thiserror::Error;
 use crate::cli::SetupArgs;
 
 const RIGHT_STATUS_LUA: &str = include_str!("../contrib/wezterm/right-status.lua");
+const KITTY_TAB_BAR_PY: &str = include_str!("../contrib/kitty/tab_bar.py");
 const HERDR_PLUGIN_TOML: &str = include_str!("../contrib/herdr-plugin/herdr-plugin.toml");
 const HERDR_PLUGIN_UPDATE_STATUS: &str = include_str!("../contrib/herdr-plugin/update-status");
 
 const SETUP_BEGIN: &str = "-- wezterm-git-status-bridge setup begin";
 const SETUP_END: &str = "-- wezterm-git-status-bridge setup end";
+const KITTY_BEGIN: &str = "# wezterm-git-status-bridge kitty setup begin";
+const KITTY_END: &str = "# wezterm-git-status-bridge kitty setup end";
+const KITTY_ADAPTER_MARKER: &str = "# wezterm-git-status-bridge managed kitty adapter";
 const SHELL_BEGIN: &str = "# wezterm-git-status-bridge setup begin";
 const SHELL_END: &str = "# wezterm-git-status-bridge setup end";
 
@@ -29,6 +33,8 @@ pub enum SetupError {
     Read { path: PathBuf, source: io::Error },
     #[error("failed to write {path}: {source}")]
     Write { path: PathBuf, source: io::Error },
+    #[error("refusing to overwrite unmanaged Kitty adapter at {0}")]
+    UnmanagedKittyAdapter(PathBuf),
     #[error("failed to mark {path} executable: {source}")]
     Permissions { path: PathBuf, source: io::Error },
     #[error("failed to link Herdr plugin: {0}")]
@@ -39,6 +45,8 @@ pub enum SetupError {
 
 pub fn run(args: &SetupArgs) -> Result<(), SetupError> {
     let home = home_dir()?;
+    let install_kitty = args.terminal.kitty;
+    let install_wezterm = args.terminal.wezterm || !install_kitty;
     let wezterm_file = args
         .wezterm_config_file
         .clone()
@@ -48,14 +56,33 @@ pub fn run(args: &SetupArgs) -> Result<(), SetupError> {
         .clone()
         .or_else(|| config_parent(&wezterm_file))
         .unwrap_or_else(|| home.join(".config/wezterm"));
+    let kitty_file = args
+        .kitty_config_file
+        .clone()
+        .unwrap_or_else(|| default_kitty_dir(&home, args).join("kitty.conf"));
+    let kitty_dir = args
+        .kitty_config_dir
+        .clone()
+        .or_else(|| config_parent(&kitty_file))
+        .unwrap_or_else(|| home.join(".config/kitty"));
     let binary_path = std::env::current_exe().map_err(SetupError::CurrentExe)?;
-    let shell_hook = args.shell_hook || (args.herdr && !args.no_shell_hook);
+    let shell_hook = args.shell_hook || ((args.herdr || install_kitty) && !args.no_shell_hook);
 
-    create_dir(&wezterm_dir)?;
-    write_file(&wezterm_dir.join("right-status.lua"), RIGHT_STATUS_LUA)?;
+    if install_wezterm {
+        create_dir(&wezterm_dir)?;
+        write_file(&wezterm_dir.join("right-status.lua"), RIGHT_STATUS_LUA)?;
+    }
+    if install_kitty {
+        create_dir(&kitty_dir)?;
+        write_kitty_adapter(&kitty_dir.join("tab_bar.py"))?;
+    }
 
     if args.herdr {
-        let plugin_dir = wezterm_dir.join("herdr-plugin");
+        let plugin_dir = if install_wezterm {
+            wezterm_dir.join("herdr-plugin")
+        } else {
+            kitty_dir.join("herdr-plugin")
+        };
         write_herdr_plugin(&plugin_dir)?;
         let herdr_bin = args
             .herdr_bin
@@ -69,7 +96,12 @@ pub fn run(args: &SetupArgs) -> Result<(), SetupError> {
         upsert_zsh_hook(&zshrc, &binary_path)?;
     }
 
-    upsert_wezterm_config(&wezterm_file, args.herdr, &binary_path)?;
+    if install_wezterm {
+        upsert_wezterm_config(&wezterm_file, args.herdr, &binary_path)?;
+    }
+    if install_kitty {
+        upsert_kitty_config(&kitty_file)?;
+    }
 
     Ok(())
 }
@@ -78,6 +110,12 @@ fn default_wezterm_dir(home: &Path, args: &SetupArgs) -> PathBuf {
     args.wezterm_config_dir
         .clone()
         .unwrap_or_else(|| home.join(".config/wezterm"))
+}
+
+fn default_kitty_dir(home: &Path, args: &SetupArgs) -> PathBuf {
+    args.kitty_config_dir
+        .clone()
+        .unwrap_or_else(|| home.join(".config/kitty"))
 }
 
 fn config_parent(path: &Path) -> Option<PathBuf> {
@@ -125,6 +163,15 @@ fn write_file(path: &Path, value: &str) -> Result<(), SetupError> {
     })
 }
 
+fn write_kitty_adapter(path: &Path) -> Result<(), SetupError> {
+    if read_optional(path)?
+        .is_some_and(|current| current.lines().next() != Some(KITTY_ADAPTER_MARKER))
+    {
+        return Err(SetupError::UnmanagedKittyAdapter(path.to_path_buf()));
+    }
+    write_file(path, KITTY_TAB_BAR_PY)
+}
+
 fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result<(), SetupError> {
     let current = read_optional(path)?;
     let block = current
@@ -139,6 +186,18 @@ fn upsert_wezterm_config(path: &Path, herdr: bool, binary_path: &Path) -> Result
         Some(current) => upsert_lua_block(&current, &block),
         None => new_wezterm_config(&block),
     };
+    write_file(path, &next)
+}
+
+fn upsert_kitty_config(path: &Path) -> Result<(), SetupError> {
+    let block = format!("{KITTY_BEGIN}\ntab_bar_style custom\ntab_bar_min_tabs 1\n{KITTY_END}");
+    let next = read_optional(path)?.map_or_else(
+        || format!("{block}\n"),
+        |current| {
+            replace_marked_block(&current, KITTY_BEGIN, KITTY_END, &block)
+                .unwrap_or_else(|| append_block(&current, &block))
+        },
+    );
     write_file(path, &next)
 }
 
@@ -487,7 +546,7 @@ fn upsert_zsh_hook(path: &Path, binary_path: &Path) -> Result<(), SetupError> {
 fn zsh_hook_block(binary_path: &Path) -> String {
     let binary = shell_single_quote(&binary_path.to_string_lossy());
     format!(
-        "{SHELL_BEGIN}\n_wezterm_git_status_bridge_update() {{\n  {binary} update --pane-id \"${{HERDR_PANE_ID:-${{WEZTERM_PANE:-shell}}}}\" --cwd \"$PWD\" >/dev/null 2>&1 &!\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _wezterm_git_status_bridge_update\nadd-zsh-hook precmd _wezterm_git_status_bridge_update\n{SHELL_END}"
+        "{SHELL_BEGIN}\n_wezterm_git_status_bridge_update() {{\n  {binary} update --pane-id \"${{HERDR_PANE_ID:-${{WEZTERM_PANE:-${{KITTY_WINDOW_ID:-shell}}}}}}\" --cwd \"$PWD\" >/dev/null 2>&1 &!\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _wezterm_git_status_bridge_update\nadd-zsh-hook precmd _wezterm_git_status_bridge_update\n{SHELL_END}"
     )
 }
 
@@ -511,9 +570,12 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::cli::SetupArgs;
+    use crate::cli::{SetupArgs, TerminalArgs};
 
-    use super::{SETUP_BEGIN, SETUP_END, SHELL_BEGIN, append_block, upsert_lua_block};
+    use super::{
+        KITTY_ADAPTER_MARKER, KITTY_BEGIN, SETUP_BEGIN, SETUP_END, SHELL_BEGIN, SetupError,
+        append_block, upsert_lua_block,
+    };
 
     #[test]
     fn inserts_lua_block_before_return() {
@@ -582,9 +644,105 @@ mod tests {
         assert!(content.contains("add-zsh-hook precmd"));
         assert!(content.contains("--cwd \"$PWD\""));
         assert!(content.contains("HERDR_PANE_ID:-"));
-        assert!(content.contains("WEZTERM_PANE:-shell"));
+        assert!(content.contains("KITTY_WINDOW_ID:-shell"));
         assert!(!content.contains("pane list"));
         assert!(!content.contains("--event-json"));
+    }
+
+    #[test]
+    fn setup_writes_kitty_files_without_touching_wezterm() {
+        let temp = TempDir::new().expect("create temp dir");
+        let kitty_dir = temp.path().join("kitty");
+        let kitty_file = kitty_dir.join("kitty.conf");
+        let wezterm_dir = temp.path().join("wezterm");
+        std::fs::create_dir_all(&kitty_dir).expect("create kitty config dir");
+        std::fs::write(
+            &kitty_file,
+            "font_size 14\ntab_title_template \"{title}\"\n",
+        )
+        .expect("write kitty config");
+
+        let args = SetupArgs {
+            terminal: TerminalArgs {
+                kitty: true,
+                ..TerminalArgs::default()
+            },
+            kitty_config_dir: Some(kitty_dir.clone()),
+            kitty_config_file: Some(kitty_file.clone()),
+            wezterm_config_dir: Some(wezterm_dir.clone()),
+            no_shell_hook: true,
+            ..SetupArgs::default()
+        };
+        super::run(&args).expect("run kitty setup");
+        super::run(&args).expect("rerun kitty setup");
+
+        let adapter =
+            std::fs::read_to_string(kitty_dir.join("tab_bar.py")).expect("read kitty adapter");
+        assert_eq!(adapter.lines().next(), Some(KITTY_ADAPTER_MARKER));
+        assert!(!wezterm_dir.join("right-status.lua").exists());
+        let config = std::fs::read_to_string(kitty_file).expect("read kitty config");
+        assert!(config.starts_with("font_size 14\n"));
+        assert!(config.contains("tab_bar_style custom"));
+        assert!(config.contains("tab_bar_min_tabs 1"));
+        assert!(config.contains("tab_title_template \"{title}\""));
+        assert!(!config.contains("tab_title_template \"{custom}\""));
+        assert_eq!(config.matches(KITTY_BEGIN).count(), 1);
+    }
+
+    #[test]
+    fn setup_preserves_unmanaged_kitty_adapter() {
+        let temp = TempDir::new().expect("create temp dir");
+        let kitty_dir = temp.path().join("kitty");
+        let kitty_file = kitty_dir.join("kitty.conf");
+        let adapter_file = kitty_dir.join("tab_bar.py");
+        std::fs::create_dir_all(&kitty_dir).expect("create kitty config dir");
+        std::fs::write(&kitty_file, "font_size 14\n").expect("write kitty config");
+        std::fs::write(&adapter_file, "def draw_tab():\n    pass\n")
+            .expect("write existing adapter");
+
+        let error = super::run(&SetupArgs {
+            terminal: TerminalArgs {
+                kitty: true,
+                ..TerminalArgs::default()
+            },
+            kitty_config_dir: Some(kitty_dir),
+            kitty_config_file: Some(kitty_file.clone()),
+            no_shell_hook: true,
+            ..SetupArgs::default()
+        })
+        .expect_err("reject unmanaged Kitty adapter");
+
+        assert!(matches!(error, SetupError::UnmanagedKittyAdapter(path) if path == adapter_file));
+        assert_eq!(
+            std::fs::read_to_string(&adapter_file).expect("read existing adapter"),
+            "def draw_tab():\n    pass\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(kitty_file).expect("read kitty config"),
+            "font_size 14\n"
+        );
+    }
+
+    #[test]
+    fn setup_can_install_both_terminal_adapters() {
+        let temp = TempDir::new().expect("create temp dir");
+        let wezterm_dir = temp.path().join("wezterm");
+        let kitty_dir = temp.path().join("kitty");
+
+        super::run(&SetupArgs {
+            terminal: TerminalArgs {
+                wezterm: true,
+                kitty: true,
+            },
+            wezterm_config_dir: Some(wezterm_dir.clone()),
+            kitty_config_dir: Some(kitty_dir.clone()),
+            no_shell_hook: true,
+            ..SetupArgs::default()
+        })
+        .expect("run combined setup");
+
+        assert!(wezterm_dir.join("right-status.lua").is_file());
+        assert!(kitty_dir.join("tab_bar.py").is_file());
     }
 
     #[test]

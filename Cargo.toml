@@ -3,11 +3,11 @@ name = "wezterm-git-status-bridge"
 version = "0.3.7"
 edition = "2024"
 rust-version = "1.96"
-description = "Bridge Git repository status into WezTerm status rendering"
+description = "Bridge Git repository status into terminal status rendering"
 license = "MIT"
 repository = "https://github.com/riii111/wezterm-git-status-bridge"
 readme = "README.md"
-keywords = ["wezterm", "git", "status", "cli"]
+keywords = ["wezterm", "kitty", "git", "status", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
