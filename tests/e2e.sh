@@ -84,7 +84,9 @@ plugin_event_cache_home="$tmp/cache-plugin-event"
 plugin_env_fallback_cache_home="$tmp/cache-plugin-env-fallback"
 plugin_no_focus_cache_home="$tmp/cache-plugin-no-focus"
 setup_hook_cache_home="$tmp/cache-setup-hook"
+setup_kitty_hook_cache_home="$tmp/cache-setup-kitty-hook"
 setup_wezterm_dir="$tmp/setup-wezterm"
+setup_kitty_dir="$tmp/setup-kitty"
 setup_zshrc="$tmp/setup-zshrc"
 lua_scratch="$tmp/lua"
 fake_herdr="$tmp/herdr"
@@ -235,6 +237,7 @@ if grep -q -- '/old/bin/wezterm-git-status-bridge' "$setup_wezterm_dir/wezterm.l
 	exit 1
 fi
 grep -q -- '--cwd "$PWD"' "$setup_zshrc"
+grep -q -- 'KITTY_WINDOW_ID:-shell' "$setup_zshrc"
 if grep -q -- 'pane list' "$setup_zshrc"; then
 	exit 1
 fi
@@ -274,6 +277,30 @@ test "$cached_pane_id" = "w1:p1"
 test "$cached_cwd" = "$dirty_repo"
 test "$present" = "1"
 test "$repo" = "dirty-repo"
+
+mkdir -p "$setup_kitty_dir"
+printf '%s\n' 'font_size 14' > "$setup_kitty_dir/kitty.conf"
+"$bin" setup --kitty --no-shell-hook --kitty-config-dir "$setup_kitty_dir"
+test -f "$setup_kitty_dir/tab_bar.py"
+grep -q -- '^font_size 14$' "$setup_kitty_dir/kitty.conf"
+grep -q -- '^tab_bar_style custom$' "$setup_kitty_dir/kitty.conf"
+grep -q -- '^tab_bar_min_tabs 1$' "$setup_kitty_dir/kitty.conf"
+if grep -q -- '^tab_title_template ' "$setup_kitty_dir/kitty.conf"; then
+	exit 1
+fi
+
+(
+	cd "$clean_repo"
+	env -u HERDR_PANE_ID -u WEZTERM_PANE \
+		XDG_CACHE_HOME="$setup_kitty_hook_cache_home" KITTY_WINDOW_ID="77" \
+		zsh -fc ". '$setup_zshrc'; _wezterm_git_status_bridge_update"
+)
+count=0
+while [ ! -f "$setup_kitty_hook_cache_home/wezterm/herdr-git-info-by-pane/77" ] && [ "$count" -lt 50 ]; do
+	count=$((count + 1))
+	sleep 0.1
+done
+test -f "$setup_kitty_hook_cache_home/wezterm/herdr-git-info-by-pane/77"
 
 cat > "$fake_herdr" <<'EOF'
 #!/usr/bin/env sh
