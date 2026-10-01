@@ -82,7 +82,7 @@ impl StatusFlags {
 }
 
 impl Payload {
-    // This wire format is parsed by the WezTerm Lua module.
+    // This wire format is the public cache contract parsed by terminal adapters.
     pub fn encode_line(&self) -> String {
         let (present, repo, ref_name, flags) = match &self.repository {
             Some(status) => (

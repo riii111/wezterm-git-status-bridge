@@ -40,7 +40,7 @@ pub fn write_payload(cache_dir: &Path, payload: &Payload) -> Result<(), CacheErr
     Ok(())
 }
 
-/// Writes the default cache set plus the Herdr-focused cache read by the WezTerm Lua module.
+/// Writes the default cache set plus the Herdr-focused cache read by terminal adapters.
 pub fn write_payload_with_focused(cache_dir: &Path, payload: &Payload) -> Result<(), CacheError> {
     write_payload(cache_dir, payload)?;
     with_focused_cache_lock(cache_dir, || write_focused_payload(cache_dir, payload))
@@ -77,7 +77,7 @@ fn focused_pane_id(cache_dir: &Path) -> Result<Option<String>, CacheError> {
     Ok(parse_focused_pane_id(&contents))
 }
 
-// The focused cache uses the payload wire format parsed by the WezTerm Lua module.
+// The focused cache uses the payload wire format shared by terminal adapters.
 fn parse_focused_pane_id(contents: &str) -> Option<String> {
     let fields = contents.lines().next()?.split('\t').collect::<Vec<_>>();
     if fields.len() < 8 || fields[0] != "herdrgit1" || fields[1].parse::<u64>().is_err() {
