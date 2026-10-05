@@ -39,12 +39,30 @@ enum Command {
 }
 
 #[derive(Args, Clone, Debug, Default)]
+pub struct TerminalArgs {
+    #[arg(long)]
+    pub wezterm: bool,
+
+    #[arg(long)]
+    pub kitty: bool,
+}
+
+#[derive(Args, Clone, Debug, Default)]
 pub struct SetupArgs {
+    #[command(flatten)]
+    pub terminal: TerminalArgs,
+
     #[arg(long, value_name = "DIR")]
     pub wezterm_config_dir: Option<PathBuf>,
 
     #[arg(long, value_name = "FILE")]
     pub wezterm_config_file: Option<PathBuf>,
+
+    #[arg(long, value_name = "DIR")]
+    pub kitty_config_dir: Option<PathBuf>,
+
+    #[arg(long, value_name = "FILE")]
+    pub kitty_config_file: Option<PathBuf>,
 
     #[arg(long)]
     pub herdr: bool,
