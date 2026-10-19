@@ -1,8 +1,8 @@
 id = "local.wezterm-git-status-bridge"
-name = "WezTerm Git Status Bridge"
+name = "Terminal Git Status Bridge"
 version = "0.1.0"
 min_herdr_version = "0.7.0"
-description = "Expose focused Herdr pane git status to WezTerm without synchronous status subprocesses."
+description = "Expose focused Herdr pane git status to terminal adapters without synchronous status subprocesses."
 platforms = ["macos"]
 
 [[events]]
