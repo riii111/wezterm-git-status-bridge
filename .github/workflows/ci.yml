@@ -68,6 +68,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y lua5.4
       - run: tmp="$(mktemp -d)" && lua5.4 tests/right-status.lua "$tmp"
 
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - run: python3 -m unittest tests/test_kitty_tab_bar.py
+
   e2e:
     name: E2E
     runs-on: ubuntu-latest
